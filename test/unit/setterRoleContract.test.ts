@@ -98,7 +98,7 @@ test('sidebar: Setter gets inbox/contacts/agenda, not workflows/analytics', () =
   const model = read('web/lib/sectionNav.ts');
   // Each page reads the permission its own gate checks (behaviour: test/unit/sectionNav.test.ts).
   assert.match(model, /p\("automations\.view"\) && \{ id: "workflows"/);
-  assert.match(model, /p\("analytics\.view"\) && \{ id: "tech-analytics"/);
+  assert.match(model, /p\("analytics\.view"\) && !isDefault && \{ id: "ai-costs"/);
   assert.match(model, /p\("analytics\.view"\) && \{ id: "value"/);
   assert.match(model, /p\("inbox\.view"\) && has\("inbox"\)/);
   assert.doesNotMatch(model, /clientRole/, 'the rail never reads a role name');

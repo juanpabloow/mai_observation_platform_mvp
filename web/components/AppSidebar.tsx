@@ -244,7 +244,6 @@ const PAGE_ICON: Partial<Record<PageId, ReactNode>> = {
   meetings: Icon.meetings,
   team: Icon.team,
   workflows: Icon.workflows,
-  "tech-analytics": Icon.overview,
 };
 
 const Chevron = ({ open }: { open: boolean }) => (
@@ -905,7 +904,7 @@ function RailBody({
  * server gate, and a section with no visible page is not rendered. NO individual
  * workflow names appear in the rail — switching workflows is the header's job.
  *
- * OUTSIDE A CLIENT: owner/admin get Clientes y workflows; a member gets a short list back
+ * OUTSIDE A CLIENT: owner/admin get Inicio (the home, where every business is managed); a member gets a short list back
  * into their client. Members never see Usuarios y accesos of another client.
  *
  * Three responsive states: full rail (≥md), collapsed icon-only rail (≥md, toggled),
@@ -1095,11 +1094,11 @@ export function AppSidebar({
         label: "Agencia",
         entries: links([
           {
-            key: "clients",
-            label: "Clientes y workflows",
-            href: "/clients",
-            icon: Icon.clients,
-            active: pathname === "/clients" || pathname.startsWith("/clients/"),
+            key: "home",
+            label: "Inicio",
+            href: "/",
+            icon: Icon.hub,
+            active: pathname === "/" || pathname === "/clients",
           },
           { ...aiCostsItem, tag: undefined }, // already under «Agencia» here
         ]),

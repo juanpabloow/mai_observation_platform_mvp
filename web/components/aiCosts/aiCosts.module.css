@@ -70,6 +70,8 @@
 .headActions {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 .pill {
@@ -163,6 +165,38 @@
   color: inherit;
   font-weight: 500;
   box-shadow: 0 0 0 1px var(--line-strong);
+}
+/* «Costos de IA | Ejecuciones», beside the dates: the segmented look, as links, pill height. */
+.screens {
+  display: inline-grid;
+  grid-auto-columns: max-content;
+  height: 36px;
+  box-sizing: border-box;
+  /* Same box as the pills beside it (border, surface, radius), so the row reads as one height. */
+  padding: 3px;
+  border-color: var(--line-strong);
+  background: var(--surface);
+}
+.screens a {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  color: var(--vd-tertiary);
+  font-size: 13.5px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 150ms ease, background 150ms ease;
+}
+.screens a:hover {
+  color: inherit;
+  background: var(--vd-inset);
+}
+.screens a[aria-current="page"] {
+  background: var(--vd-inset);
+  color: inherit;
+  font-weight: 500;
 }
 .menu {
   width: min(280px, calc(100vw - 32px));
@@ -429,17 +463,19 @@
   position: absolute;
   inset: 0;
   display: flex;
-  gap: 3px;
+  gap: 2px;
 }
+/* The whole day is the hit target; the bar itself is a thin centered column (style B). */
 .col {
   flex: 1 1 0;
   min-width: 0;
   display: flex;
   flex-direction: column-reverse;
+  align-items: center;
   padding: 0;
   border: 0;
   background: transparent;
-  border-radius: 4px 4px 0 0;
+  border-radius: 6px 6px 0 0;
   cursor: default;
 }
 .col:hover,
@@ -448,22 +484,27 @@
 }
 .seg2 {
   display: block;
-  width: 100%;
+  width: clamp(3px, 58%, 14px);
   flex: none;
 }
 /* 2px surface gap between stacked segments; only the top one is rounded. */
 .seg2 + .seg2 {
   box-shadow: 0 2px 0 0 var(--surface);
 }
+.col:hover .seg2 + .seg2,
+.col:focus-visible .seg2 + .seg2 {
+  box-shadow: 0 2px 0 0 var(--vd-inset);
+}
 .top {
-  border-radius: 4px 4px 0 0;
+  border-radius: 5px 5px 0 0;
 }
 .unknown {
+  width: clamp(3px, 58%, 14px);
   background: repeating-linear-gradient(135deg, var(--vd-track-2) 0 3px, transparent 3px 6px);
   border: 1px dashed var(--line-strong);
   border-bottom: 0;
   box-sizing: border-box;
-  border-radius: 4px 4px 0 0;
+  border-radius: 5px 5px 0 0;
 }
 .dim .col:not(.on) .seg2 {
   opacity: 0.55;
@@ -726,4 +767,158 @@
   margin: 0;
   font-size: 14.5px;
   font-weight: 600;
+}
+
+/* ------------------------------------------------- executions: n8n plan -- */
+
+.plan {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.plan:first-of-type {
+  border-top: 0;
+}
+.planHead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.planHead .linkBtn {
+  margin-left: auto;
+}
+.meter {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--vd-inset);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.meterFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: var(--ai-s5);
+}
+/* Where the cycle ends at today's pace: a tick, not a second fill. */
+.meterProj {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--vd-secondary);
+}
+.planStats {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.planForm {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--vd-inset);
+}
+.planField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.planActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.planForm > .small,
+.planForm > [role="alert"] {
+  grid-column: 1 / -1;
+}
+
+/* ---------------------------------------- executions: who uses it most -- */
+
+.usageTogether {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(240px, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .usageTogether {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.rank {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* A ranking row is also the way to see that entity alone. */
+.rankRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin: -6px -8px;
+  padding: 6px 8px;
+  box-sizing: content-box;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms ease, opacity 150ms ease;
+}
+.rankRow:hover {
+  background: var(--vd-inset);
+}
+.rankRow[aria-pressed="true"] {
+  background: var(--vd-inset);
+}
+.rankDim {
+  opacity: 0.5;
+}
+.rankTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 14px;
+}
+.rankName {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rankBar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--vd-inset);
+  overflow: hidden;
+}
+.rankBar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
 }

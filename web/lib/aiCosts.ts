@@ -2,6 +2,8 @@ import "server-only";
 import { getSessionScope, hasFullAccess, type AccessScope } from "./access";
 import { resolveValueAccess } from "./valueDashboard";
 import { getUsdCop } from "./usdCop";
+import { tenantChartSlots } from "./chartSlots";
+import type { ChartColorSlot } from "@worker/analytics/chartColors.js";
 import { isUuid } from "./clientModuleValidation";
 import { getClientById, listClientsForTenant } from "@worker/db/repositories/clients.js";
 import {
@@ -69,6 +71,8 @@ export interface AiCostsReport {
   billing: OpenAiBilling | null;
   /** What OpenAI billed for THIS business (business view only, when the agency is connected). */
   clientBilling: ClientBilling | null;
+  /** Chart color slot per business, assigned tenant-wide (a business view gets only its own). */
+  chartSlots: Record<string, ChartColorSlot>;
 }
 
 /** One business's share of the invoice — exact (its own project) + approximate (shared). */
@@ -185,6 +189,11 @@ async function loadClientBilling(tenantId: string, clientId: string, period: Per
   };
 }
 
+/** Only `id`'s entry: a business view never learns other businesses' ids. */
+export function pick<T>(map: Record<string, T>, id: string): Record<string, T> {
+  return id in map ? { [id]: map[id] } : {};
+}
+
 export type AiCostsResult =
   | { ok: true; data: AiCostsReport }
   | { ok: false; status: 400 | 401 | 404; error: string };
@@ -243,10 +252,12 @@ export async function buildAiCosts(
     ),
     getUsdCop(),
   ]);
-  const [billing, clientBilling] = await Promise.all([
+  const [billing, clientBilling, allSlots] = await Promise.all([
     access.client ? Promise.resolve(null) : loadBilling(tenantId, period, baseline, { current, previous }),
     access.client ? loadClientBilling(tenantId, access.client.id, period, baseline) : Promise.resolve(null),
+    tenantChartSlots(tenantId),
   ]);
+  const chartSlots = access.client ? pick(allSlots, access.client.id) : allSlots;
   return {
     ok: true,
     data: {
@@ -262,6 +273,7 @@ export async function buildAiCosts(
       comparison: compareAiCosts(current, previous, { current: period.days, previous: baseline.days }),
       billing,
       clientBilling,
+      chartSlots,
     },
   };
 }

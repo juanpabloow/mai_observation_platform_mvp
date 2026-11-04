@@ -29,7 +29,7 @@ export async function addConnectionAction(input: {
   }
   revalidatePath("/settings/connections");
   revalidatePath("/");
-  revalidatePath("/clients");
+  revalidatePath("/");
   return { ok: true };
 }
 

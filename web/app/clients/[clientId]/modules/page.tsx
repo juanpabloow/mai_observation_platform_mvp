@@ -50,7 +50,7 @@ export default async function ClientModulesPage({
         status={client.name}
         center={<p className="truncate text-sm text-muted">Identity and product capabilities for this client.</p>}
         actions={
-          <Link href={`/clients/${client.id}/workflows/all/analytics`} className={OUTLINE_CLS}>
+          <Link href={`/clients/${client.id}/workflows`} className={OUTLINE_CLS}>
             Open workspace
           </Link>
         }

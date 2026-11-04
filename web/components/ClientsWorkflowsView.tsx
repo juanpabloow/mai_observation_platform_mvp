@@ -61,7 +61,7 @@ function ModuleChip({ label }: { label: string }) {
  * Client logo: the uploaded image (from R2's public URL) when set, else a
  * monogram placeholder. Same square slot either way so the layout is stable.
  */
-function ClientLogo({ name, logoUrl }: { name: string; logoUrl: string | null }) {
+function ClientLogo({ name, logoUrl, color = null }: { name: string; logoUrl: string | null; color?: { light: string; dark: string } | null }) {
   if (logoUrl) {
     return (
       // eslint-disable-next-line @next/next/no-img-element -- tiny external logo from R2; Next image optimizer not needed
@@ -74,6 +74,17 @@ function ClientLogo({ name, logoUrl }: { name: string; logoUrl: string | null })
     );
   }
   const letter = name.trim()[0]?.toUpperCase() ?? "?";
+  if (color) {
+    return (
+      <span
+        aria-hidden
+        className={`${cc.avatar} flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-semibold text-white`}
+        style={{ ["--l" as string]: color.light, ["--d" as string]: color.dark }}
+      >
+        {letter}
+      </span>
+    );
+  }
   return (
     <span
       aria-hidden
@@ -81,22 +92,6 @@ function ClientLogo({ name, logoUrl }: { name: string; logoUrl: string | null })
     >
       {letter}
     </span>
-  );
-}
-
-function FolderIcon({ open }: { open: boolean }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" className="size-4 shrink-0 text-muted" aria-hidden>
-      <path
-        d={
-          open
-            ? "M2.5 6.5A1.5 1.5 0 0 1 4 5h3.2l1.3 1.5H16A1.5 1.5 0 0 1 17.5 8H6.2a1.5 1.5 0 0 0-1.4 1L3 14.5V6.5Z"
-            : "M2.5 5.5A1.5 1.5 0 0 1 4 4h3.2l1.5 1.6H16A1.5 1.5 0 0 1 17.5 7v7A1.5 1.5 0 0 1 16 15.5H4A1.5 1.5 0 0 1 2.5 14V5.5Z"
-        }
-        fill="currentColor"
-        opacity={open ? 0.9 : 0.7}
-      />
-    </svg>
   );
 }
 
@@ -237,20 +232,29 @@ export function ClientsWorkflowsView({
   clientOptions,
   r2Enabled,
   enabledModules,
+  renderDoors,
+  renderMeta,
+  colorOf,
 }: {
   looseWorkflows: WorkflowItem[];
   folders: ClientFolderView[];
   clientOptions: ClientOption[];
   /** Whether R2 is configured — gates the logo upload UI (graceful optional). */
   r2Enabled: boolean;
-  /** clientId → ENABLED module keys (crm/scheduling), for the per-client chips. */
+  /** clientId → ENABLED module keys (crm/scheduling/inbox), for the per-client chips. */
   enabledModules: Record<string, string[]>;
+  /** The business's doors (Inbox, dashboard, agenda), right of its name. */
+  renderDoors?: (folder: ClientFolderView) => React.ReactNode;
+  /** One line under the name (e.g. its executions); defaults to the workflow count. */
+  renderMeta?: (folder: ClientFolderView) => React.ReactNode;
+  /** The business's chart color (light/dark hex) for its initial when it has no logo. */
+  colorOf?: (clientId: string) => { light: string; dark: string } | null;
 }) {
   const router = useRouter();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Client-side search over client names + their workflow names/ids.
+  // Client-side search over business names + their workflow names/ids.
   const [query, setQuery] = useState("");
 
   // Modals
@@ -305,17 +309,15 @@ export function ClientsWorkflowsView({
     <RowMenu
       open={openMenu === menuKey}
       onToggle={() => setOpenMenu(openMenu === menuKey ? null : menuKey)}
-      ariaLabel="Workflow actions"
+      ariaLabel="Acciones del workflow"
       align="right"
       width={224}
     >
-      <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
-        Move to
-      </p>
+      <p className="px-3 pb-1 pt-2 text-[11px] font-medium text-neutral-500">Mover a</p>
       <div className="max-h-64 overflow-y-auto pb-1">
         {clientOptions.map((c) => {
           const current = c.id === w.clientId;
-          const label = c.isDefault ? "Unassigned" : c.name;
+          const label = c.isDefault ? "Sin negocio" : c.name;
           return (
             <button
               key={c.id}
@@ -325,7 +327,7 @@ export function ClientsWorkflowsView({
               className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] disabled:cursor-default disabled:opacity-100 dark:hover:bg-subtle"
             >
               <span className="truncate">{label}</span>
-              {current ? <span aria-hidden className="text-xs text-accent">✓ here</span> : null}
+              {current ? <span aria-hidden className="text-xs text-accent">✓ aquí</span> : null}
             </button>
           );
         })}
@@ -338,12 +340,10 @@ export function ClientsWorkflowsView({
       <Link href={workflowHref(w)} className="flex min-w-0 flex-1 items-center gap-3">
         <span
           className={`h-1.5 w-1.5 shrink-0 rounded-full ${w.active ? "bg-green-400" : "bg-neutral-600"}`}
-          title={w.active ? "Active" : "Inactive"}
+          title={w.active ? "Activo" : "Inactivo"}
         />
         <span className="min-w-0">
-          <span className="block truncate text-sm font-medium text-foreground">
-            {w.name ?? w.n8nWorkflowId}
-          </span>
+          <span className="block truncate text-sm font-medium text-foreground">{w.name ?? w.n8nWorkflowId}</span>
           <span className="block truncate font-mono text-xs text-neutral-500">{w.n8nWorkflowId}</span>
         </span>
       </Link>
@@ -351,224 +351,169 @@ export function ClientsWorkflowsView({
     </div>
   );
 
-  // ── Client-side search over client names + their workflow names/ids ──
+  const menuItem = "flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle";
+
+  // ── Client-side search over business names + their workflow names/ids ──
   const q = query.trim().toLowerCase();
   const matchWf = (w: WorkflowItem): boolean =>
-    !q ||
-    (w.name ?? w.n8nWorkflowId).toLowerCase().includes(q) ||
-    w.n8nWorkflowId.toLowerCase().includes(q);
+    !q || (w.name ?? w.n8nWorkflowId).toLowerCase().includes(q) || w.n8nWorkflowId.toLowerCase().includes(q);
   const visibleLoose = q ? looseWorkflows.filter(matchWf) : looseWorkflows;
-  const visibleFolders = q
-    ? folders.filter((f) => f.name.toLowerCase().includes(q) || f.workflows.some(matchWf))
-    : folders;
+  const visibleFolders = q ? folders.filter((f) => f.name.toLowerCase().includes(q) || f.workflows.some(matchWf)) : folders;
   const noResults = q !== "" && visibleFolders.length === 0 && visibleLoose.length === 0;
 
   return (
-    <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-6 py-10">
-      <header className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="space-y-1.5">
-            <Link href="/" className="text-sm text-neutral-500 transition-colors hover:text-foreground">
-              &larr; Overview
-            </Link>
-            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Clients</h1>
-            <p className="text-sm text-muted">
-              Workspaces that group workflows, conversations, and modules. Ungrouped workflows stay{" "}
-              <span className="text-foreground">Unassigned</span>.
-            </p>
-          </div>
+    <section aria-labelledby="home-businesses" className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id="home-businesses" className="m-0 text-[12.5px] font-medium text-muted">
+          Tus negocios · {folders.length}
+        </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar negocio o workflow"
+            aria-label="Buscar negocio o workflow"
+            className="h-9 w-64 max-w-full rounded-[10px] border border-line-strong bg-surface px-3 text-sm outline-none focus:border-foreground/40"
+          />
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500"
+            className="inline-flex h-9 items-center gap-1.5 rounded-[10px] border border-line-strong bg-surface px-3 text-sm font-medium transition-colors hover:bg-subtle"
           >
-            <span aria-hidden>＋</span> New client
+            <span aria-hidden>＋</span> Nuevo negocio
           </button>
         </div>
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search clients or workflows…"
-          aria-label="Search clients or workflows"
-          className="h-9 w-full max-w-sm rounded-lg border border-black/10 bg-transparent px-3 text-sm outline-none focus:border-line-strong dark:border-line-strong"
-        />
-      </header>
+      </div>
 
       {noResults ? (
-        <p className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-sm text-faint">
-          No clients or workflows match &ldquo;{query.trim()}&rdquo;.
+        <p className="rounded-[14px] border border-dashed border-line px-4 py-10 text-center text-sm text-faint">
+          Ningún negocio ni workflow coincide con &laquo;{query.trim()}&raquo;.
         </p>
       ) : null}
 
-      {/* Unassigned (default client's workflows shown as loose files) */}
+      {/* Businesses — each with its doors, ⋯ management menu and expandable workflows */}
       {!noResults ? (
-      <section className="flex flex-col gap-2">
-        <h2 className="px-1 text-[11px] font-medium uppercase tracking-wider text-neutral-500">
-          Unassigned · {visibleLoose.length}
-        </h2>
-        {visibleLoose.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-black/10 px-4 py-6 text-center text-sm text-faint dark:border-line">
-            {q ? "No matching unassigned workflows." : "Nothing unassigned."}
+        folders.length === 0 ? (
+          <p className="rounded-[14px] border border-dashed border-line px-4 py-6 text-center text-sm text-faint">
+            Aún no hay negocios. Crea uno con <span className="text-muted">＋ Nuevo negocio</span> y mueve allí sus workflows.
           </p>
         ) : (
-          <ul className="divide-y divide-black/5 overflow-hidden rounded-2xl border border-black/10 dark:divide-white/5 dark:border-line">
-            {visibleLoose.map((w) => (
-              <li key={w.id}>{workflowRow(w, `wf:loose:${w.id}`)}</li>
-            ))}
-          </ul>
-        )}
-      </section>
+          <div className="flex flex-col gap-2.5">
+            {visibleFolders.map((folder) => {
+              const isOpen = expanded.has(folder.id) || (q !== "" && folder.workflows.some(matchWf) && !folder.name.toLowerCase().includes(q));
+              const menuKey = `client:${folder.id}`;
+              const moduleKeys = enabledModules[folder.id] ?? [];
+              const shownWorkflows = q && !folder.name.toLowerCase().includes(q) ? folder.workflows.filter(matchWf) : folder.workflows;
+              return (
+                <article key={folder.id} className="overflow-hidden rounded-[14px] border border-line bg-surface">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-3">
+                    <button
+                      type="button"
+                      onClick={() => toggle(folder.id)}
+                      aria-expanded={isOpen}
+                      aria-label={`${isOpen ? "Ocultar" : "Ver"} workflows de ${folder.name}`}
+                      className="flex min-w-0 flex-1 basis-64 items-center gap-3 text-left"
+                    >
+                      <Chevron open={isOpen} />
+                      <ClientLogo name={folder.name} logoUrl={folder.logoUrl} color={colorOf?.(folder.id) ?? null} />
+                      <span className="min-w-0">
+                        <span className="block truncate text-[15px] font-semibold">{folder.name}</span>
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs text-muted">
+                            {renderMeta ? renderMeta(folder) : `${folder.workflowCount} workflow${folder.workflowCount === 1 ? "" : "s"}`}
+                          </span>
+                          {moduleKeys.includes("crm") ? <ModuleChip label="CRM" /> : null}
+                          {moduleKeys.includes("scheduling") ? <ModuleChip label="Agenda" /> : null}
+                          {moduleKeys.includes("inbox") ? <ModuleChip label="Inbox" /> : null}
+                        </span>
+                      </span>
+                    </button>
+
+                    <div className="flex items-center gap-1.5">
+                      {renderDoors ? renderDoors(folder) : null}
+
+                      {/* Business ⋯ menu — never on the default client (shown apart below). */}
+                      <RowMenu
+                        open={openMenu === menuKey}
+                        onToggle={() => setOpenMenu(openMenu === menuKey ? null : menuKey)}
+                        ariaLabel={`Acciones de ${folder.name}`}
+                        align="right"
+                        width={200}
+                      >
+                        <div className="py-1">
+                          <Link href={`/clients/${folder.id}/modules`} onClick={() => setOpenMenu(null)} className={menuItem}>
+                            Módulos
+                          </Link>
+                          <Link href={`/clients/${folder.id}/team`} onClick={() => setOpenMenu(null)} className={menuItem}>
+                            Miembros
+                          </Link>
+                          <Link href={`/clients/${folder.id}/workflows`} onClick={() => setOpenMenu(null)} className={menuItem}>
+                            Workflows
+                          </Link>
+                          <Link href={`/clients/${folder.id}/costos-ia?vista=ejecuciones`} onClick={() => setOpenMenu(null)} className={menuItem}>
+                            Ejecuciones y costos
+                          </Link>
+                          <div className="my-1 border-t border-line" />
+                          <button type="button" onClick={() => { setOpenMenu(null); setRenameTarget(folder); }} className={menuItem}>
+                            Renombrar
+                          </button>
+                          <button type="button" onClick={() => { setOpenMenu(null); setColorTarget(folder); }} className={menuItem}>
+                            Color en gráficos
+                          </button>
+                          {r2Enabled ? (
+                            <button type="button" onClick={() => { setOpenMenu(null); setLogoTarget(folder); }} className={menuItem}>
+                              {folder.logoUrl ? "Cambiar logo" : "Agregar logo"}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => { setOpenMenu(null); setDeleteTarget(folder); }}
+                            className="flex w-full items-center px-3 py-1.5 text-left text-sm text-danger transition-colors hover:bg-red-500/10"
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </RowMenu>
+                    </div>
+                  </div>
+
+                  {isOpen ? (
+                    shownWorkflows.length === 0 ? (
+                      <p className="border-t border-line px-4 py-5 text-center text-sm text-faint">
+                        Sin workflows: asígnale uno desde el menú ⋯ de un workflow.
+                      </p>
+                    ) : (
+                      <ul className="divide-y divide-line border-t border-line">
+                        {shownWorkflows.map((w) => (
+                          <li key={w.id} className="pl-8">
+                            {workflowRow(w, `wf:${folder.id}:${w.id}`)}
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        )
       ) : null}
 
-      {/* Client folders */}
-      {!noResults ? (
-      <section className="flex flex-col gap-3">
-        <h2 className="px-1 text-[11px] font-medium uppercase tracking-wider text-neutral-500">
-          Clients · {visibleFolders.length}
-        </h2>
-        {folders.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-black/10 px-4 py-6 text-center text-sm text-faint dark:border-line">
-            No clients yet. Create one with <span className="text-muted">＋ New client</span>, then
-            move workflows into it.
-          </p>
-        ) : (
-          visibleFolders.map((folder) => {
-            const isOpen = expanded.has(folder.id);
-            const menuKey = `client:${folder.id}`;
-            const moduleKeys = enabledModules[folder.id] ?? [];
-            return (
-              <div
-                key={folder.id}
-                className="overflow-hidden rounded-2xl border border-black/10 bg-black/[0.02] dark:border-line dark:bg-card"
-              >
-                <div className="flex items-center gap-2 px-3 py-2.5">
-                  <button
-                    type="button"
-                    onClick={() => toggle(folder.id)}
-                    aria-expanded={isOpen}
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                  >
-                    <Chevron open={isOpen} />
-                    <ClientLogo name={folder.name} logoUrl={folder.logoUrl} />
-                    <FolderIcon open={isOpen} />
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2">
-                        <span className="truncate text-sm font-semibold">{folder.name}</span>
-                        <ChartColorDot slot={folder.chartColor} />
-                      </span>
-                      <span className="flex items-center gap-1.5">
-                        <span className="text-xs text-neutral-500">
-                          {folder.workflowCount} workflow{folder.workflowCount === 1 ? "" : "s"}
-                        </span>
-                        {moduleKeys.includes("crm") ? <ModuleChip label="CRM" /> : null}
-                        {moduleKeys.includes("scheduling") ? <ModuleChip label="Scheduling" /> : null}
-                        {moduleKeys.includes("inbox") ? <ModuleChip label="Inbox" /> : null}
-                      </span>
-                    </span>
-                  </button>
-
-                  {/* Open the client's workspace (aggregate overview — valid even with
-                      zero workflows). Real route, no fabricated data. */}
-                  <Link
-                    href={`/clients/${folder.id}/workflows/all/analytics`}
-                    className="hidden shrink-0 rounded-lg border border-black/10 px-2.5 py-1 text-xs text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground sm:inline-flex dark:border-line-strong dark:hover:bg-subtle"
-                  >
-                    Open
-                  </Link>
-
-                  {/* Client ⋯ menu: rename / delete (never on the default client) */}
-                  <RowMenu
-                    open={openMenu === menuKey}
-                    onToggle={() => setOpenMenu(openMenu === menuKey ? null : menuKey)}
-                    ariaLabel="Client actions"
-                    align="right"
-                    width={176}
-                  >
-                    <div className="py-1">
-                      {/* Modules is per-NAMED-client only — the default client is
-                          rendered as loose "Unassigned" workflows outside these
-                          folders, so it never gets this menu. */}
-                      <Link
-                        href={`/clients/${folder.id}/modules`}
-                        onClick={() => setOpenMenu(null)}
-                        className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-                      >
-                        Modules
-                      </Link>
-                      <Link
-                        href={`/clients/${folder.id}/team`}
-                        onClick={() => setOpenMenu(null)}
-                        className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-                      >
-                        Members
-                      </Link>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOpenMenu(null);
-                          setRenameTarget(folder);
-                        }}
-                        className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-                      >
-                        Rename
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOpenMenu(null);
-                          setColorTarget(folder);
-                        }}
-                        className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-                      >
-                        Chart color
-                      </button>
-                      {r2Enabled ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOpenMenu(null);
-                            setLogoTarget(folder);
-                          }}
-                          className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-                        >
-                          {folder.logoUrl ? "Change logo" : "Add logo"}
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOpenMenu(null);
-                          setDeleteTarget(folder);
-                        }}
-                        className="flex w-full items-center px-3 py-1.5 text-left text-sm text-danger transition-colors hover:bg-red-500/10"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </RowMenu>
-                </div>
-
-                {isOpen ? (
-                  folder.workflows.length === 0 ? (
-                    <p className="border-t border-black/5 px-4 py-5 text-center text-sm text-faint dark:border-line">
-                      No workflows — assign one via a workflow&rsquo;s ⋯ menu.
-                    </p>
-                  ) : (
-                    <ul className="divide-y divide-black/5 border-t border-black/5 dark:divide-white/5 dark:border-line">
-                      {folder.workflows.map((w) => (
-                        <li key={w.id} className="pl-3">
-                          {workflowRow(w, `wf:${folder.id}:${w.id}`)}
-                        </li>
-                      ))}
-                    </ul>
-                  )
-                ) : null}
-              </div>
-            );
-          })
-        )}
-      </section>
+      {/* Workflows with no business (the default client's), shown as loose files */}
+      {!noResults && (visibleLoose.length > 0 || !q) ? (
+        <div className="mt-2 flex flex-col gap-2">
+          <h3 className="m-0 text-[12.5px] font-medium text-muted">Workflows sin negocio · {visibleLoose.length}</h3>
+          {visibleLoose.length === 0 ? (
+            <p className="rounded-[14px] border border-dashed border-line px-4 py-4 text-center text-sm text-faint">Todos los workflows tienen negocio.</p>
+          ) : (
+            <ul className="divide-y divide-line overflow-hidden rounded-[14px] border border-line bg-surface">
+              {visibleLoose.map((w) => (
+                <li key={w.id}>{workflowRow(w, `wf:loose:${w.id}`)}</li>
+              ))}
+            </ul>
+          )}
+        </div>
       ) : null}
 
       {createOpen ? (
@@ -649,8 +594,8 @@ export function ClientsWorkflowsView({
 
       {renameTarget ? (
         <NameModal
-          title="Rename client"
-          confirmLabel="Save"
+          title="Renombrar negocio"
+          confirmLabel="Guardar"
           initialValue={renameTarget.name}
           busy={busy}
           onCancel={() => setRenameTarget(null)}
@@ -672,15 +617,13 @@ export function ClientsWorkflowsView({
 
       {deleteTarget ? (
         <ConfirmModal
-          title={`Delete "${deleteTarget.name}"?`}
+          title={`¿Eliminar «${deleteTarget.name}»?`}
           body={
             deleteTarget.workflowCount > 0
-              ? `Its ${deleteTarget.workflowCount} workflow${
-                  deleteTarget.workflowCount === 1 ? "" : "s"
-                } will move to Unassigned. This can't be undone.`
-              : "This client has no workflows. This can't be undone."
+              ? `Sus ${deleteTarget.workflowCount} workflow${deleteTarget.workflowCount === 1 ? "" : "s"} quedarán sin negocio. No se puede deshacer.`
+              : "Este negocio no tiene workflows. No se puede deshacer."
           }
-          confirmLabel="Delete client"
+          confirmLabel="Eliminar negocio"
           busy={busy}
           error={deleteError}
           onCancel={() => {
@@ -693,17 +636,17 @@ export function ClientsWorkflowsView({
             try {
               const res = await deleteClientAction({ clientId: deleteTarget.id });
               if (!res.ok && res.result === "has_members") {
-                // RBAC: members are scoped to this client — block with a clear,
+                // RBAC: members are scoped to this business — block with a clear,
                 // actionable message instead of a DB FK error.
                 const n = res.memberCount ?? 0;
                 setDeleteError(
                   <>
-                    {n} member{n === 1 ? " is" : "s are"} assigned to this client. Reassign or
-                    remove {n === 1 ? "them" : "them"} on the{" "}
+                    {n === 1 ? "Hay 1 miembro asignado" : `Hay ${n} miembros asignados`} a este negocio. Reasígnalos o quítalos
+                    primero en{" "}
                     <Link href="/settings/team" className="underline hover:opacity-80">
-                      Team page
-                    </Link>{" "}
-                    first.
+                      Equipo
+                    </Link>
+                    .
                   </>,
                 );
                 return;
@@ -721,21 +664,7 @@ export function ClientsWorkflowsView({
           }}
         />
       ) : null}
-    </main>
-  );
-}
-
-/** The business's chart color, when one was chosen (automatic shows nothing). */
-function ChartColorDot({ slot }: { slot: string | null }) {
-  const c = CHART_COLORS.find((x) => x.slot === slot);
-  if (!c) return null;
-  return (
-    <span
-      title={`Chart color: ${c.label}`}
-      aria-label={`Chart color: ${c.label}`}
-      className={`${cc.sw} h-2.5 w-2.5 rounded-full`}
-      style={{ ["--l" as string]: c.light, ["--d" as string]: c.dark }}
-    />
+    </section>
   );
 }
 
@@ -759,13 +688,13 @@ function ColorModal({
     if (busy) return;
     setError(null);
     const res = await onPick(slot);
-    if (!res.ok) setError(res.error ?? "Something went wrong.");
+    if (!res.ok) setError(res.error ?? "Algo salió mal.");
   };
   return (
     <Backdrop onClose={onCancel}>
-      <h3 className="mb-1 text-sm font-medium">Chart color</h3>
+      <h3 className="mb-1 text-sm font-medium">Color en gráficos</h3>
       <p className="mb-4 text-xs text-muted">How «{client.name}» is drawn in Costos de IA. Colors are checked for color blindness and dark mode.</p>
-      <div role="radiogroup" aria-label="Chart color" className="grid grid-cols-4 gap-2">
+      <div role="radiogroup" aria-label="Color en gráficos" className="grid grid-cols-4 gap-2">
         {CHART_COLORS.map((c) => {
           const on = client.chartColor === c.slot;
           return (
@@ -795,7 +724,7 @@ function ColorModal({
           aria-pressed={client.chartColor === null}
           className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground"
         >
-          {client.chartColor === null ? "Automatic (current)" : "Use automatic"}
+          {client.chartColor === null ? "Automático (actual)" : "Usar automático"}
         </button>
         <button type="button" onClick={onCancel} className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground">
           Close
@@ -829,7 +758,7 @@ function NameModal({
   const submit = async () => {
     setError(null);
     const res = await onSubmit(value);
-    if (!res.ok) setError(res.error ?? "Something went wrong.");
+    if (!res.ok) setError(res.error ?? "Algo salió mal.");
   };
 
   return (
@@ -853,7 +782,7 @@ function NameModal({
           onClick={onCancel}
           className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground"
         >
-          Cancel
+          Cancelar
         </button>
         <button
           type="button"
@@ -861,7 +790,7 @@ function NameModal({
           disabled={busy || value.trim() === ""}
           className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
         >
-          {busy ? "Saving…" : confirmLabel}
+          {busy ? "Guardando…" : confirmLabel}
         </button>
       </div>
     </Backdrop>
@@ -909,11 +838,11 @@ function LogoPicker({
       return;
     }
     if (!ALLOWED_LOGO_MIME.includes(f.type)) {
-      onPick(null, "Use a PNG, JPEG, or WebP image.");
+      onPick(null, "Usa una imagen PNG, JPEG o WebP.");
       return;
     }
     if (f.size > MAX_LOGO_MB * 1024 * 1024) {
-      onPick(null, `Image too large (max ${MAX_LOGO_MB} MB).`);
+      onPick(null, `Imagen demasiado grande (máximo ${MAX_LOGO_MB} MB).`);
       return;
     }
     onPick(f, null);
@@ -932,7 +861,7 @@ function LogoPicker({
         )}
       </span>
       <label className="cursor-pointer rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle">
-        {file ? "Choose a different image" : "Choose image"}
+        {file ? "Elegir otra imagen" : "Elegir imagen"}
         <input
           type="file"
           accept="image/png,image/jpeg,image/webp"
@@ -946,7 +875,7 @@ function LogoPicker({
           onClick={() => onPick(null, null)}
           className="text-xs text-neutral-500 transition-colors hover:text-foreground"
         >
-          Remove
+          Quitar
         </button>
       ) : null}
     </div>
@@ -986,18 +915,18 @@ function CreateClientModal({
     if (createdId) {
       if (!file) return onDone();
       const up = await onUploadLogo(createdId, file);
-      if (!up.ok) return setError(`Logo upload failed: ${up.error}`);
+      if (!up.ok) return setError(`No se pudo subir el logo: ${up.error}`);
       return onDone();
     }
-    if (!name.trim()) return setError("Client name is required.");
+    if (!name.trim()) return setError("Escribe el nombre del negocio.");
     const res = await onCreate(name);
-    if (!res.ok || !res.clientId) return setError(res.error ?? "Could not create client.");
+    if (!res.ok || !res.clientId) return setError(res.error ?? "No se pudo crear el negocio.");
     if (!file) return onDone();
     setCreatedId(res.clientId);
     const up = await onUploadLogo(res.clientId, file);
     if (!up.ok) {
       return setError(
-        `Client created, but the logo upload failed: ${up.error}. Add one later via the ⋯ menu.`,
+        `Negocio creado, pero no se pudo subir el logo: ${up.error}. Agrégalo luego desde el menú ⋯.`,
       );
     }
     onDone();
@@ -1005,12 +934,12 @@ function CreateClientModal({
 
   return (
     <Backdrop onClose={createdId ? onDone : onCancel}>
-      <h3 className="mb-3 text-sm font-medium">New client</h3>
+      <h3 className="mb-3 text-sm font-medium">Nuevo negocio</h3>
       <input
         type="text"
         autoFocus
         value={name}
-        placeholder="e.g. Coca Cola"
+        placeholder="Nombre del negocio"
         disabled={!!createdId}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
@@ -1019,7 +948,7 @@ function CreateClientModal({
         className={inputClass}
       />
       <div className="mt-3">
-        <p className="mb-1.5 text-xs font-medium text-muted">Logo (optional)</p>
+        <p className="mb-1.5 text-xs font-medium text-muted">Logo (opcional)</p>
         {r2Enabled ? (
           <>
             <LogoPicker
@@ -1034,7 +963,7 @@ function CreateClientModal({
           </>
         ) : (
           <p className="text-xs text-faint">
-            Logo upload is unavailable (storage not configured).
+            Subir logos no está disponible (falta configurar el almacenamiento).
           </p>
         )}
       </div>
@@ -1045,7 +974,7 @@ function CreateClientModal({
           onClick={createdId ? onDone : onCancel}
           className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground"
         >
-          {createdId ? "Done" : "Cancel"}
+          {createdId ? "Listo" : "Cancelar"}
         </button>
         <button
           type="button"
@@ -1053,7 +982,7 @@ function CreateClientModal({
           disabled={busy || (!createdId && name.trim() === "") || !!fileError}
           className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
         >
-          {busy ? "Saving…" : createdId ? "Retry logo" : "Create client"}
+          {busy ? "Guardando…" : createdId ? "Reintentar logo" : "Crear negocio"}
         </button>
       </div>
     </Backdrop>
@@ -1080,12 +1009,12 @@ function LogoModal({
     if (!file) return;
     setError(null);
     const res = await onSubmit(file);
-    if (!res.ok) setError(res.error ?? "Upload failed.");
+    if (!res.ok) setError(res.error ?? "No se pudo subir.");
   };
 
   return (
     <Backdrop onClose={onCancel}>
-      <h3 className="mb-1 text-sm font-medium">{client.logoUrl ? "Change logo" : "Add logo"}</h3>
+      <h3 className="mb-1 text-sm font-medium">{client.logoUrl ? "Cambiar logo" : "Agregar logo"}</h3>
       <p className="mb-3 text-xs text-neutral-500">{client.name}</p>
       <LogoPicker
         file={file}
@@ -1103,7 +1032,7 @@ function LogoModal({
           onClick={onCancel}
           className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground"
         >
-          Cancel
+          Cancelar
         </button>
         <button
           type="button"
@@ -1111,7 +1040,7 @@ function LogoModal({
           disabled={busy || !file || !!fileError}
           className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
         >
-          {busy ? "Uploading…" : "Save logo"}
+          {busy ? "Subiendo…" : "Guardar logo"}
         </button>
       </div>
     </Backdrop>
@@ -1150,7 +1079,7 @@ function ConfirmModal({
           onClick={onCancel}
           className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground"
         >
-          Cancel
+          Cancelar
         </button>
         <button
           type="button"
@@ -1158,7 +1087,7 @@ function ConfirmModal({
           disabled={busy || Boolean(error)}
           className="rounded-lg bg-red-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-50"
         >
-          {busy ? "Deleting…" : confirmLabel}
+          {busy ? "Eliminando…" : confirmLabel}
         </button>
       </div>
     </Backdrop>

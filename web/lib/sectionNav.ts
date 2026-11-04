@@ -8,7 +8,7 @@
  *                 Presencia y marketing (Página de reservas, Reseñas, Campañas)
  *                 Dashboard de valor
  *   Herramientas  Configuración (Sedes, Reglas de reserva, Campos personalizados,
- *                 Usuarios y accesos) · Automatizaciones (Workflows, Analíticas técnicas,
+ *                 Usuarios y accesos) · Automatizaciones (Workflows, Costos de IA,
  *                 Reuniones)
  *   Agencia       Módulos — apart, agency only.
  *
@@ -48,7 +48,6 @@ export type PageId =
   | "fields"
   | "users"
   | "workflows"
-  | "tech-analytics"
   | "ai-costs"
   | "meetings"
   | "modules";
@@ -116,9 +115,7 @@ const ROW_NAVIGATES: Partial<Record<SectionId, PageId>> = { agenda: "calendar" }
 
 export function workflowScopeHrefs(clientId: string, scope: string | "all" = "all") {
   const c = `/clients/${clientId}/workflows`;
-  return scope === "all"
-    ? { executions: c, analytics: `${c}/all/analytics` }
-    : { executions: `${c}/${encodeURIComponent(scope)}/executions`, analytics: `${c}/${encodeURIComponent(scope)}/analytics` };
+  return { executions: scope === "all" ? c : `${c}/${encodeURIComponent(scope)}/executions` };
 }
 
 export function buildSections(ctx: NavContext): NavSection[] {
@@ -189,7 +186,6 @@ export function buildSections(ctx: NavContext): NavSection[] {
       // Workflows = the scope's executions (the production rail item, list + per-workflow
       // pages); there is no separate all-workflows execution screen to duplicate it with.
       p("automations.view") && { id: "workflows", label: "Workflows", href: wf.executions },
-      p("analytics.view") && { id: "tech-analytics", label: "Analíticas técnicas", href: wf.analytics },
       // What this business's bots spend in AI (same gate as the value dashboard).
       p("analytics.view") && !isDefault && { id: "ai-costs", label: "Costos de IA", href: c("/costos-ia") },
       p("meetings.view") && has("meetings") && { id: "meetings", label: "Reuniones", href: c("/reuniones") },
@@ -241,7 +237,6 @@ const ROUTES: Array<{ re: RegExp; section: SectionId; page: PageId }> = [
   { re: /^\/scheduling\/rules(?:\/|$)/, section: "settings", page: "rules" },
   { re: /^\/scheduling\/payment-methods(?:\/|$)/, section: "settings", page: "payment-methods" },
   { re: /^\/team(?:\/|$)/, section: "settings", page: "users" },
-  { re: /^\/workflows\/[^/]+\/analytics(?:\/|$)/, section: "automations", page: "tech-analytics" },
   { re: /^\/workflows(?:\/|$)/, section: "automations", page: "workflows" },
   { re: /^\/reuniones(?:\/|$)/, section: "automations", page: "meetings" },
   { re: /^\/costos-ia(?:\/|$)/, section: "automations", page: "ai-costs" },
