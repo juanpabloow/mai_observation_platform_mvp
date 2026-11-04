@@ -294,7 +294,7 @@ async function googleFlow(
       headers: { "content-type": "application/json", origin: BASE, ...(opts.cookie ? { cookie: opts.cookie } : {}) },
       body: JSON.stringify({
         provider: "google",
-        callbackURL: opts.callbackURL ?? "/negocios",
+        callbackURL: opts.callbackURL ?? "/",
         errorCallbackURL: "/login",
         additionalData: opts.additionalData,
       }),

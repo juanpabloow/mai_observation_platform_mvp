@@ -18,6 +18,3 @@ export const END_REASON_MESSAGE: Record<Exclude<SessionEndReason, "revoked">, st
 
 /** The channel tabs of the same browser use to agree on activity and sign-outs. */
 export const SESSION_CHANNEL = "mai-session";
-
-/** Remembers the last business picked in /negocios (a navigation preference, not an authorization). */
-export const LAST_BUSINESS_COOKIE = "mai_last_business";

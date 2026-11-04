@@ -64,7 +64,7 @@ export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
     setBusy("google");
     setError(null);
     try {
-      const result = await authClient.signIn.social({ provider: "google", callbackURL: "/negocios", errorCallbackURL: "/signup" });
+      const result = await authClient.signIn.social({ provider: "google", callbackURL: "/", errorCallbackURL: "/signup" });
       if (result.error) {
         setError(mapClientAuthError(result.error.code, "No pudimos abrir Google. Inténtalo otra vez."));
         setBusy(null);

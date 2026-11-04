@@ -24,8 +24,8 @@ export interface HeaderWorkflow {
   active: boolean | null;
 }
 
-// ACCESO-1: /invite and /negocios are access screens too (their own full-screen frame).
-const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password", "/invite", "/negocios"];
+// ACCESO-1: /invite is an access screen too (its own full-screen frame).
+const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password", "/invite"];
 
 /** Small client logo (uploaded image or monogram fallback) for breadcrumb + picker. */
 function MiniLogo({ name, logoUrl, size = "size-5" }: { name: string; logoUrl: string | null; size?: string }) {

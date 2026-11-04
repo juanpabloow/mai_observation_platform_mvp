@@ -11,7 +11,9 @@
  */
 const BLOCKED_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password", "/api", "/_next"];
 
-export const DEFAULT_AFTER_LOGIN = "/negocios";
+/** Inicio: the agency's home (each business with its doors); `/` lands a member in their own
+ *  business. The old «¿A qué negocio entras?» stop (/negocios) was removed 2026-11-03. */
+export const DEFAULT_AFTER_LOGIN = "/";
 
 export function safeInternalPath(value: string | null | undefined, fallback = DEFAULT_AFTER_LOGIN): string {
   if (!value || typeof value !== "string" || value.length > 2048) return fallback;
