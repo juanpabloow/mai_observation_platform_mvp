@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { PageShell } from "@/components/ui/PageShell";
+import { ModuleSurface, SurfaceHeader } from "@/components/ui/module/ModuleSurface";
+import { Segmented } from "@/components/ui/controls";
 import { NoSitesState } from "./NoSitesState";
 import { priceLabelCOP } from "@/lib/money";
 import { hoursLabel, type OccupancyGranularity, type OccupancyRow } from "@/lib/occupancyView";
@@ -12,8 +13,9 @@ const GRAN_PARAM: Record<OccupancyGranularity, string> = { day: "dia", week: "se
 const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 
-const INPUT = "h-[34px] rounded-lg border border-line-strong bg-surface px-2.5 text-xs text-foreground outline-none transition focus:border-foreground";
-const SEG = "u-focus rounded-md px-3 py-1 text-xs transition";
+const INPUT = "u-focus h-[44px] rounded-sch-control border border-line-strong bg-surface px-2.5 text-sm text-foreground outline-none transition focus:border-foreground lg:h-[36px] lg:text-xs";
+// 44px on phones and tablets (the shared controls' floor), the desktop density from lg.
+const STEP = "u-focus u-tap grid size-[44px] place-items-center rounded-sch-control border border-line-strong text-muted transition hover:bg-subtle hover:text-foreground lg:size-[36px]";
 
 function fmtDay(day: string): string {
   const [, m, d] = day.split("-").map(Number);
@@ -38,12 +40,12 @@ type SortKey = "name" | "available" | "reservada" | "atendida" | "noshow" | "fre
 
 export function OccupancyPanel({
   clientId,
-  clientName,
   canSites = false,
   view,
 }: {
   clientId: string;
-  clientName: string;
+  /** Kept for callers; the breadcrumb names the business, so the title no longer does. */
+  clientName?: string;
   /** May create sites (settings.sites) — the no-site state's «Ir a Sedes». */
   canSites?: boolean;
   view: OccupancyView;
@@ -86,58 +88,53 @@ export function OccupancyPanel({
     return sort.dir === "asc" ? cmp : -cmp;
   });
 
+  // The controls move into the shared title band; there is nothing to move without a site.
+  const controls = noSites ? null : (
+    <>
+      {!view.isStaff && view.sites.length > 1 ? (
+        <select aria-label="Sede" value={view.selectedSiteId ?? ""} onChange={(e) => nav({ site: e.target.value, staff: null })} className={`${INPUT} max-w-[12rem]`}>
+          {view.sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      ) : null}
+      <Segmented
+        label="Periodo"
+        size="sm"
+        value={view.granularity}
+        options={[{ value: "day", label: "Día" }, { value: "week", label: "Semana" }, { value: "month", label: "Mes" }] as const}
+        onChange={(g) => setGran(g)}
+      />
+      <div className="flex items-center gap-1">
+        <button type="button" aria-label="Periodo anterior" onClick={() => step(-1)} className={STEP}>‹</button>
+        <span className="min-w-[8.5rem] text-center text-xs font-medium text-foreground">{periodLabel(view)}</span>
+        <button type="button" aria-label="Periodo siguiente" onClick={() => step(1)} className={STEP}>›</button>
+        <button type="button" onClick={() => nav({ d: null })} className="u-focus ml-1 h-[44px] rounded-sch-control border border-line-strong px-3 text-xs text-muted transition hover:bg-subtle hover:text-foreground lg:h-[36px]">Hoy</button>
+      </div>
+    </>
+  );
+
   return (
-    <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
-      <PageShell grow={false} clip={false}>
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-2.5">
-              <h1 className="u-page-title truncate text-[19px] font-semibold tracking-[-0.025em] text-foreground">Ocupación</h1>
-              <span className="truncate text-xs text-muted">{clientName}</span>
-            </div>
-            <p className="mt-0.5 hidden text-xs text-muted sm:block">
-              Cuánto del tiempo disponible de cada profesional se vende. Reservada cuenta lo agendado; atendida, lo que de verdad asistió.
-            </p>
-          </div>
-          {noSites ? null : (
-          <div className="flex flex-wrap items-center gap-2">
-            {!view.isStaff && view.sites.length > 1 ? (
-              <select aria-label="Sede" value={view.selectedSiteId ?? ""} onChange={(e) => nav({ site: e.target.value, staff: null })} className={`${INPUT} max-w-[12rem]`}>
-                {view.sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            ) : null}
-            <div className="flex items-center gap-0.5 rounded-lg bg-chip p-0.5" role="group" aria-label="Periodo">
-              {(["day", "week", "month"] as const).map((g) => (
-                <button key={g} type="button" aria-pressed={view.granularity === g} onClick={() => setGran(g)}
-                  className={`${SEG} ${view.granularity === g ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}>
-                  {g === "day" ? "Día" : g === "week" ? "Semana" : "Mes"}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-1">
-              <button type="button" aria-label="Periodo anterior" onClick={() => step(-1)} className="u-focus grid size-[34px] place-items-center rounded-lg border border-line-strong text-muted transition hover:bg-subtle hover:text-foreground">‹</button>
-              <span className="min-w-[8.5rem] text-center text-xs font-medium text-foreground">{periodLabel(view)}</span>
-              <button type="button" aria-label="Periodo siguiente" onClick={() => step(1)} className="u-focus grid size-[34px] place-items-center rounded-lg border border-line-strong text-muted transition hover:bg-subtle hover:text-foreground">›</button>
-              <button type="button" onClick={() => nav({ d: null })} className="u-focus ml-1 h-[34px] rounded-lg border border-line-strong px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground">Hoy</button>
-            </div>
-          </div>
-          )}
-        </div>
-      </PageShell>
+    // The approved surface (auditoría UI 2026-11-03, F07): ONE surface with the shared title
+    // band, the period controls as its actions, and the sections separated by hairlines —
+    // not a header card over three more cards. The business is the breadcrumb's job.
+    <ModuleSurface label="Ocupación">
+      <SurfaceHeader
+        title="Ocupación"
+        summary="Cuánto del tiempo disponible de cada profesional se vende. Reservada cuenta lo agendado; atendida, lo que de verdad asistió."
+        actions={controls}
+      />
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
 
       {view.sites.length === 0 ? (
-        <PageShell>
-          <NoSitesState clientId={clientId} canManageSites={canSites} reason="La ocupación se mide con los horarios de cada sede." />
-        </PageShell>
+        <NoSitesState clientId={clientId} canManageSites={canSites} reason="La ocupación se mide con los horarios de cada sede." />
       ) : view.rows.length === 0 ? (
-        <PageShell><p className="p-8 text-center text-sm text-muted">No hay profesionales que tomen reservas en esta sede todavía.</p></PageShell>
+        <p className="p-8 text-center text-sm text-muted">No hay profesionales que tomen reservas en esta sede todavía.</p>
       ) : (
         <>
           {/* Site-total — the one bold number: how full the team is this period. */}
           {view.siteTotal ? <SiteTotal row={view.siteTotal} canMoney={view.canMoney} /> : null}
 
           {/* Per-professional table (sortable; horizontal scroll at ~390px). */}
-          <PageShell ariaLabel="Ocupación por profesional" className="overflow-auto">
+          <section aria-label="Ocupación por profesional" className="overflow-x-auto border-t border-line-soft">
             <table className="w-full min-w-[46rem] border-collapse text-xs">
               <thead className="sticky top-0 z-10 bg-surface text-muted shadow-[0_1px_0_var(--line)]">
                 <tr>
@@ -145,7 +142,7 @@ export function OccupancyPanel({
                   <Th sort={sort} onSort={setSort} k="available" label="Horas disp." num />
                   <Th sort={sort} onSort={setSort} k="reservada" label="Reservada" num />
                   <Th sort={sort} onSort={setSort} k="atendida" label="Atendida" num />
-                  <Th sort={sort} onSort={setSort} k="noshow" label="No-shows" num />
+                  <Th sort={sort} onSort={setSort} k="noshow" label="No asistió" num />
                   <Th sort={sort} onSort={setSort} k="free" label="Libres 7d" num />
                   <th scope="col" className="whitespace-nowrap px-2.5 py-1.5 text-left font-medium">Tendencia</th>
                   {view.canMoney ? <Th sort={sort} onSort={setSort} k="collected" label="Cobrado" num /> : null}
@@ -171,11 +168,11 @@ export function OccupancyPanel({
             <p className="px-4 py-2 text-[0.625rem] text-faint">
               Reservada = agendado ÷ disponible. Atendida = asistido ÷ disponible. El tiempo fuera de horario no infla el porcentaje.
             </p>
-          </PageShell>
+          </section>
 
           {/* Heatmap — when is the site (or a professional) busiest, this period. */}
           {view.heatmap ? (
-            <PageShell ariaLabel="Mapa de ocupación por día y hora" className="overflow-auto">
+            <section aria-label="Mapa de ocupación por día y hora" className="overflow-x-auto border-t border-line-soft">
               <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 sm:px-5">
                 <h2 className="text-xs font-semibold text-foreground">Ocupación por día y hora</h2>
                 {!view.isStaff ? (
@@ -187,18 +184,19 @@ export function OccupancyPanel({
               </div>
               <Heatmap grid={view.heatmap.grid} />
               <p className="px-4 pb-3 text-[0.625rem] text-faint">Intensidad = porcentaje reservado de la capacidad de esa hora. Las horas sin capacidad quedan en blanco.</p>
-            </PageShell>
+            </section>
           ) : null}
         </>
       )}
-    </main>
+      </div>
+    </ModuleSurface>
   );
 }
 
 function SiteTotal({ row, canMoney }: { row: OccupancyRow; canMoney: boolean }) {
   return (
-    <PageShell grow={false} clip={false}>
-      <div className="flex flex-wrap items-center gap-x-8 gap-y-3 px-4 py-4 sm:px-5">
+    <section aria-label="Toda la sede" className="border-t border-line-soft">
+      <div className="flex flex-wrap items-center gap-x-8 gap-y-3 px-4 py-4 md:px-[20px]">
         <div>
           <div className="text-[0.625rem] uppercase tracking-wide text-faint">Ocupación reservada · toda la sede</div>
           <div className="u-tnum text-[2rem] font-semibold leading-none text-foreground">{pctLabel(row.reservadaPct)}</div>
@@ -206,11 +204,11 @@ function SiteTotal({ row, canMoney }: { row: OccupancyRow; canMoney: boolean }) 
         <Metric label="Atendida" value={pctLabel(row.atendidaPct)} />
         <Metric label="Horas disponibles" value={hoursLabel(row.availableMin)} />
         <Metric label="Horas libres (7d)" value={hoursLabel(row.freeMin)} />
-        <Metric label="No-shows" value={row.noShowMin > 0 ? hoursLabel(row.noShowMin) : "—"} />
+        <Metric label="No asistió" value={row.noShowMin > 0 ? hoursLabel(row.noShowMin) : "—"} />
         {canMoney ? <Metric label="Cobrado" value={priceLabelCOP(row.collectedAmount ?? "0") ?? "$0"} /> : null}
         {canMoney ? <Metric label="Ventas / hora disp." value={row.salesPerAvailableHour != null ? `${priceLabelCOP(row.salesPerAvailableHour)}` : "—"} /> : null}
       </div>
-    </PageShell>
+    </section>
   );
 }
 

@@ -21,6 +21,14 @@ import {
 } from "@/lib/textScale";
 import { TOPBAR_LABELS, TOPBAR_PREFS, parseTopbarPref, topbarCookie, type TopbarPref } from "@/lib/topbarPref";
 
+/** Display names only — the values passed to setTheme / compared against stay as they are. */
+const THEME_LABELS = { light: "Claro", dark: "Oscuro", system: "Sistema" } as const;
+const ROLE_LABELS: Record<"owner" | "admin" | "member", string> = {
+  owner: "Dueño",
+  admin: "Administrador",
+  member: "Miembro",
+};
+
 /**
  * The shared ACCOUNT menu content (identity + theme + real account actions). ONE
  * implementation, rendered by BOTH the header's profile dropdown and the sidebar's
@@ -51,15 +59,15 @@ export function AccountMenu({
   return (
     <>
       <div className="border-b border-line px-3 py-2">
-        <p className="text-[10px] font-medium uppercase tracking-wider text-faint">Signed in as</p>
+        <p className="text-[10px] font-medium uppercase tracking-wider text-faint">Sesión iniciada como</p>
         <p className="truncate text-sm text-foreground">{email}</p>
-        <p className="mt-0.5 truncate text-xs capitalize text-muted">
-          {role}
+        <p className="mt-0.5 truncate text-xs text-muted">
+          {ROLE_LABELS[role]}
           {clientLabel ? <span className="text-faint"> · {clientLabel}</span> : null}
         </p>
       </div>
       <div className="border-b border-line px-3 py-2.5">
-        <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-faint">Theme</p>
+        <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-faint">Tema</p>
         <div className="flex gap-0.5 rounded-lg border border-line p-0.5">
           {(["light", "dark", "system"] as const).map((opt) => (
             <button
@@ -67,13 +75,13 @@ export function AccountMenu({
               type="button"
               onClick={() => setTheme(opt)}
               aria-pressed={theme === opt}
-              className={`flex-1 rounded-md px-2 py-1 text-xs capitalize transition-colors ${
+              className={`min-w-0 flex-1 rounded-md px-1 py-1 text-xs transition-colors ${
                 theme === opt
                   ? "bg-subtle font-medium text-foreground"
                   : "text-muted hover:text-foreground"
               }`}
             >
-              {opt}
+              {THEME_LABELS[opt]}
             </button>
           ))}
         </div>
@@ -90,14 +98,14 @@ export function AccountMenu({
               onClick={onNavigate}
               className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
             >
-              Team
+              Equipo de la agencia
             </Link>
             <Link
               href="/settings/connections"
               onClick={onNavigate}
               className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
             >
-              n8n connections
+              Conexiones de n8n
             </Link>
           </>
         ) : null}
@@ -107,14 +115,14 @@ export function AccountMenu({
           onClick={onNavigate}
           className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
         >
-          Sign-in &amp; security
+          Inicio de sesión y seguridad
         </Link>
         <Link
           href="/logout"
           onClick={onNavigate}
           className="flex w-full items-center px-3 py-1.5 text-left text-sm text-danger transition-colors hover:bg-red-500/10"
         >
-          Log out
+          Cerrar sesión
         </Link>
       </div>
     </>
@@ -154,7 +162,7 @@ function TextSize() {
   return (
     <div className="border-b border-line px-3 py-2.5">
       <p id="text-size-label" className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-faint">
-        Text size
+        Tamaño del texto
       </p>
       <div role="group" aria-labelledby="text-size-label" className="flex gap-0.5 rounded-lg border border-line p-0.5">
         {TEXT_SCALES.map((opt) => (
@@ -163,7 +171,7 @@ function TextSize() {
             type="button"
             onClick={() => setScale(opt)}
             aria-pressed={scale === opt}
-            className={`flex-1 rounded-md px-2 py-1 text-xs transition-colors ${
+            className={`min-w-0 flex-1 rounded-md px-1 py-1 text-xs transition-colors ${
               scale === opt ? "bg-subtle font-medium text-foreground" : "text-muted hover:text-foreground"
             }`}
           >
@@ -197,7 +205,7 @@ function SidebarAppearance() {
   return (
     <div className="border-b border-line px-3 py-2.5">
       <p id="sidebar-appearance-label" className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-faint">
-        Sidebar appearance
+        Menú lateral
       </p>
       <div role="group" aria-labelledby="sidebar-appearance-label" className="flex gap-0.5 rounded-lg border border-line p-0.5">
         {SIDEBAR_THEMES.map((opt) => (
@@ -206,7 +214,7 @@ function SidebarAppearance() {
             type="button"
             onClick={() => setTheme(opt)}
             aria-pressed={theme === opt}
-            className={`flex-1 rounded-md px-2 py-1 text-xs transition-colors ${
+            className={`min-w-0 flex-1 rounded-md px-1 py-1 text-xs transition-colors ${
               theme === opt ? "bg-subtle font-medium text-foreground" : "text-muted hover:text-foreground"
             }`}
           >
@@ -239,7 +247,7 @@ function TopBar() {
   return (
     <div className="border-b border-line px-3 py-2.5">
       <p id="top-bar-label" className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-faint">
-        Top bar
+        Barra superior
       </p>
       <div role="group" aria-labelledby="top-bar-label" className="flex gap-0.5 rounded-lg border border-line p-0.5">
         {TOPBAR_PREFS.map((opt) => (
@@ -251,7 +259,7 @@ function TopBar() {
               setPref(opt);
             }}
             aria-pressed={pref === opt}
-            className={`flex-1 rounded-md px-2 py-1 text-xs transition-colors ${
+            className={`min-w-0 flex-1 rounded-md px-1 py-1 text-xs transition-colors ${
               pref === opt ? "bg-subtle font-medium text-foreground" : "text-muted hover:text-foreground"
             }`}
           >

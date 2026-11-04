@@ -321,7 +321,7 @@ export function ClientInboxWorkspace({
                   </button>
                 </div>
               ) : (
-                <EmptyNote title="Nada en esta pestaña" body="Cambia de pestaña o de workflow para ver más conversaciones." />
+                <EmptyNote title="Nada en esta pestaña" body="Cambia de pestaña o de flujo para ver más conversaciones." />
               )
             ) : (
               groups.map((g) => (
@@ -538,7 +538,7 @@ function WorkflowSelector({ clientId, scope, workflows }: { clientId: string; sc
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Elegir workflow"
+        aria-label="Elegir flujo"
         data-ib-workflow=""
         data-on={scope !== "all" ? "" : undefined}
         onClick={toggle}
@@ -549,16 +549,16 @@ function WorkflowSelector({ clientId, scope, workflows }: { clientId: string; sc
       {open && pos ? (
         <div
           role="menu"
-          aria-label="Workflows"
+          aria-label="Flujos"
           style={{ top: pos.top, right: pos.right, maxHeight: pos.maxHeight }}
           className="fixed z-50 w-[min(300px,calc(100vw-1rem))] overflow-y-auto rounded-xl border border-line bg-popover p-1.5 text-popover-foreground shadow-[var(--shadow-float)]"
         >
-          <p className="px-2.5 pb-1 pt-1.5 text-xs text-faint">Workflows</p>
-          {item("all", "Todos los workflows", null)}
+          <p className="px-2.5 pb-1 pt-1.5 text-xs text-faint">Flujos</p>
+          {item("all", "Todos los flujos", null)}
           {active.length ? <p className="px-2.5 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-wide text-faint">Activos</p> : null}
-          {active.map((w) => item(w.id, w.name ?? "Workflow sin nombre", "active"))}
+          {active.map((w) => item(w.id, w.name ?? "Flujo sin nombre", "active"))}
           {inactive.length ? <p className="px-2.5 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-wide text-faint">Inactivos</p> : null}
-          {inactive.map((w) => item(w.id, w.name ?? "Workflow sin nombre", "inactive"))}
+          {inactive.map((w) => item(w.id, w.name ?? "Flujo sin nombre", "inactive"))}
         </div>
       ) : null}
     </div>

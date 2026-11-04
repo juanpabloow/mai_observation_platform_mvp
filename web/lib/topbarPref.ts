@@ -18,7 +18,7 @@ export const TOPBAR_COOKIE = 'topbar';
 export const TOPBAR_PREFS = ['shown', 'hidden'] as const;
 export type TopbarPref = (typeof TOPBAR_PREFS)[number];
 
-export const TOPBAR_LABELS: Record<TopbarPref, string> = { shown: 'Show', hidden: 'Hide' };
+export const TOPBAR_LABELS: Record<TopbarPref, string> = { shown: 'Mostrar', hidden: 'Ocultar' };
 
 /** A known stored choice, or null when the person never chose. */
 export function parseTopbarPref(value: string | undefined | null): TopbarPref | null {

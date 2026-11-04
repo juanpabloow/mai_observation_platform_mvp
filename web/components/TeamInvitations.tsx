@@ -31,14 +31,22 @@ const STATUS_BADGE: Record<string, string> = {
   expired: "bg-subtle text-muted",
 };
 
+/** Display names for the invite status badge — the raw status keeps driving the styling. */
+const STATUS_LABEL: Record<string, string> = {
+  pending: "pendiente",
+  accepted: "aceptada",
+  revoked: "revocada",
+  expired: "vencida",
+};
+
 function roleLabel(inv: TeamInviteView): string {
-  if (inv.clientRole === "owner") return `owner · ${inv.clientName ?? "—"}`;
+  if (inv.clientRole === "owner") return `dueño · ${inv.clientName ?? "—"}`;
   if (inv.clientRole === "staff") {
-    return `staff · ${inv.schedulingStaffName ?? "—"} · ${inv.schedulingSiteName ?? "—"}`;
+    return `profesional · ${inv.schedulingStaffName ?? "—"} · ${inv.schedulingSiteName ?? "—"}`;
   }
-  if (inv.clientRole === "setter") return `setter · ${inv.clientName ?? "—"}`;
-  if (inv.clientRole === "custom") return `${inv.roleLabel ?? "custom"} · ${inv.clientName ?? "—"}`;
-  return inv.role === "member" ? `member · ${inv.clientName ?? "—"}` : "admin";
+  if (inv.clientRole === "setter") return `recepción · ${inv.clientName ?? "—"}`;
+  if (inv.clientRole === "custom") return `${inv.roleLabel ?? "personalizado"} · ${inv.clientName ?? "—"}`;
+  return inv.role === "member" ? `miembro · ${inv.clientName ?? "—"}` : "administrador";
 }
 
 export function TeamInvitations({ invites }: { invites: TeamInviteView[] }) {
@@ -48,10 +56,10 @@ export function TeamInvitations({ invites }: { invites: TeamInviteView[] }) {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Pending invitations</h2>
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Invitaciones pendientes</h2>
         {pending.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-line px-4 py-8 text-center text-sm text-faint">
-            No pending invitations.
+            No hay invitaciones pendientes.
           </p>
         ) : (
           <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">
@@ -65,7 +73,7 @@ export function TeamInvitations({ invites }: { invites: TeamInviteView[] }) {
       {past.length > 0 ? (
         <details className="group">
           <summary className="cursor-pointer list-none text-xs font-medium uppercase tracking-wider text-faint hover:text-muted">
-            History ({past.length})
+            Historial ({past.length})
           </summary>
           <ul className="mt-2 divide-y divide-line overflow-hidden rounded-2xl border border-line">
             {past.map((inv) => (
@@ -75,7 +83,7 @@ export function TeamInvitations({ invites }: { invites: TeamInviteView[] }) {
                   <span className="ml-2 text-xs text-faint">{roleLabel(inv)}</span>
                 </div>
                 <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${STATUS_BADGE[inv.isExpired ? "expired" : inv.status]}`}>
-                  {inv.isExpired && inv.status === "pending" ? "expired" : inv.status}
+                  {STATUS_LABEL[inv.isExpired && inv.status === "pending" ? "expired" : inv.status] ?? inv.status}
                 </span>
               </li>
             ))}
@@ -98,9 +106,9 @@ function PendingRow({ invite }: { invite: TeamInviteView }) {
     try {
       const res = await revokeInvitationAction(invite.id);
       if (res.ok) router.refresh();
-      else setError("Could not revoke.");
+      else setError("No se pudo revocar.");
     } catch {
-      setError("Could not revoke.");
+      setError("No se pudo revocar.");
     } finally {
       setBusy(false);
     }
@@ -114,7 +122,7 @@ function PendingRow({ invite }: { invite: TeamInviteView }) {
           <span className="ml-2 text-xs text-faint">{roleLabel(invite)}</span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <span className="text-xs text-faint">expires {invite.expiryLabel}</span>
+          <span className="text-xs text-faint">vence el {invite.expiryLabel}</span>
           {confirm ? (
             <span className="flex items-center gap-1.5">
               <button
@@ -123,14 +131,14 @@ function PendingRow({ invite }: { invite: TeamInviteView }) {
                 onClick={revoke}
                 className="rounded-md bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50"
               >
-                Revoke
+                Revocar
               </button>
               <button
                 type="button"
                 onClick={() => setConfirm(false)}
                 className="rounded-md px-2 py-1 text-xs text-muted hover:text-foreground"
               >
-                Cancel
+                Cancelar
               </button>
             </span>
           ) : (
@@ -140,13 +148,13 @@ function PendingRow({ invite }: { invite: TeamInviteView }) {
               onClick={() => setConfirm(true)}
               className="rounded-md px-2 py-1 text-xs text-danger transition-colors hover:bg-red-500/10 disabled:opacity-50"
             >
-              Revoke
+              Revocar
             </button>
           )}
         </div>
       </div>
       <p className="text-xs text-faint">
-        {invite.invitedByEmail ? `invited by ${invite.invitedByEmail} · ` : ""}sent {invite.sentLabel}
+        {invite.invitedByEmail ? `invitado por ${invite.invitedByEmail} · ` : ""}enviada el {invite.sentLabel}
       </p>
       {error ? <p className="text-xs text-danger">{error}</p> : null}
     </li>

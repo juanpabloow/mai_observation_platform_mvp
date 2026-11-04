@@ -57,13 +57,13 @@ export function WorkflowSwitcherPanel({
 
   const activeWfs = workflows.filter((w) => (w.active ?? false) && matchWf(w));
   const inactiveWfs = workflows.filter((w) => !(w.active ?? false) && matchWf(w));
-  const showAll = !needle || "all workflows".includes(needle);
+  const showAll = !needle || "todos los flujos".includes(needle);
 
   // Flat navigable option list in visual order — the source of truth for keyboard
   // navigation + aria-activedescendant.
   const options = useMemo<FlatOption[]>(() => {
     const opts: FlatOption[] = [];
-    if (showAll) opts.push({ key: "all", scope: "all", label: "All workflows" });
+    if (showAll) opts.push({ key: "all", scope: "all", label: "Todos los flujos" });
     for (const w of activeWfs) opts.push({ key: w.id, scope: w.id, label: w.name ?? w.id });
     for (const w of inactiveWfs) opts.push({ key: w.id, scope: w.id, label: w.name ?? w.id });
     return opts;
@@ -134,6 +134,7 @@ export function WorkflowSwitcherPanel({
           ref={inputRef}
           type="text"
           role="combobox"
+          aria-label="Buscar flujos"
           aria-expanded
           aria-controls={listboxId}
           aria-autocomplete="list"
@@ -143,32 +144,32 @@ export function WorkflowSwitcherPanel({
             setQ(e.target.value);
             setActiveIndex(0);
           }}
-          placeholder="Search workflows…"
+          placeholder="Buscar flujos…"
           className="h-8 w-full rounded-lg border border-black/10 bg-transparent px-2.5 text-sm outline-none focus:border-line-strong dark:border-line-strong"
         />
       </div>
 
-      <div id={listboxId} role="listbox" aria-label="Workflows" className="max-h-72 overflow-y-auto py-1">
+      <div id={listboxId} role="listbox" aria-label="Flujos" className="max-h-72 overflow-y-auto py-1">
         {options.length === 0 ? (
-          <p className="px-3 py-2 text-xs text-neutral-500">No workflows match.</p>
+          <p className="px-3 py-2 text-xs text-neutral-500">Ningún flujo coincide.</p>
         ) : (
           <>
             {/* "All workflows" — the first, visually set-apart option (the everything view). */}
             {showAll ? <div className="border-b border-line pb-1">{row(options[0], 0)}</div> : null}
 
             {activeWfs.length > 0 ? (
-              <div role="group" aria-label="Active">
+              <div role="group" aria-label="Activos">
                 <p className="px-3 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
-                  Active
+                  Activos
                 </p>
                 {activeWfs.map((w, j) => row(options[activeStart + j], activeStart + j, true, true))}
               </div>
             ) : null}
 
             {inactiveWfs.length > 0 ? (
-              <div role="group" aria-label="Inactive">
+              <div role="group" aria-label="Inactivos">
                 <p className="px-3 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
-                  Inactive
+                  Inactivos
                 </p>
                 {inactiveWfs.map((w, k) => row(options[inactiveStart + k], inactiveStart + k, true, false))}
               </div>
@@ -178,7 +179,7 @@ export function WorkflowSwitcherPanel({
       </div>
 
       {clientName ? (
-        <p className="border-t border-line px-3 py-1.5 text-[10px] text-faint">Workflows in {clientName}</p>
+        <p className="border-t border-line px-3 py-1.5 text-[10px] text-faint">Flujos de {clientName}</p>
       ) : null}
     </div>
   );

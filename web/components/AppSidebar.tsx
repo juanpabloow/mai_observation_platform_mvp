@@ -515,8 +515,8 @@ function RailToggle({ onClick, push = false }: { onClick: () => void; push?: boo
     <button
       type="button"
       onClick={onClick}
-      aria-label="Toggle sidebar"
-      title="Toggle sidebar"
+      aria-label="Mostrar u ocultar el menú lateral"
+      title="Mostrar u ocultar el menú lateral"
       className={`u-rail-toggle shrink-0 items-center justify-center rounded-lg p-1.5 text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-fg ${push ? "ml-auto" : ""}`}
     >
       <svg viewBox="0 0 16 16" fill="none" aria-hidden className="size-4">
@@ -893,7 +893,7 @@ function RailBody({
           onClick={() => setAcctOpen((o) => !o)}
           aria-haspopup="menu"
           aria-expanded={acctOpen}
-          aria-label={collapsed ? `Account: ${label}` : undefined}
+          aria-label={collapsed ? `Cuenta: ${label}` : undefined}
           title={account.email}
           // The SAME row as the nav items above (RAIL_ROW): same inset, same 10px radius,
           // same hover. It used to be a full-width `rounded-lg` block with its own
@@ -927,7 +927,7 @@ function RailBody({
           <div
             role="menu"
             className={`absolute z-50 overflow-hidden rounded-lg border border-line bg-popover ${
-              collapsed ? "bottom-2 left-full ml-2 w-60" : "inset-x-2 bottom-full mb-2"
+              collapsed ? "bottom-2 left-full ml-2 w-64" : "bottom-full left-2 mb-2 w-64 max-w-[calc(100vw-1rem)]"
             }`}
           >
             <AccountMenu
@@ -1190,7 +1190,8 @@ export function AppSidebar({
         <div className="xl:hidden">
           <button
             type="button"
-            aria-label="Cerrar menú"
+            aria-hidden
+            tabIndex={-1}
             onClick={() => setMobileOpen(false)}
             className="fixed inset-0 z-40 bg-black/40"
           />
@@ -1202,6 +1203,20 @@ export function AppSidebar({
             tabIndex={-1}
             className="fixed inset-y-0 left-0 z-50 flex w-[min(18rem,86vw)] flex-col bg-sidebar-bg shadow-[var(--shadow-float)]"
           >
+            {/* A VISIBLE way out (auditoría UI 2026-11-03, F17). The scrim and Escape closed the
+                drawer, but the scrim is not discoverable as a button and a phone has no Escape.
+                44×44, on the brand row; focus returns to the opener through the trap. */}
+            <button
+              type="button"
+              onClick={() => setMobileOpen(false)}
+              aria-label="Cerrar menú"
+              title="Cerrar menú"
+              className="u-focus absolute right-1.5 top-0 z-10 inline-flex size-11 items-center justify-center rounded-lg text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-fg"
+            >
+              <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </button>
             <RailBody
               sections={sections}
               agency={agency}

@@ -31,7 +31,7 @@ export function ExecutionPane({ children }: { children: React.ReactNode }) {
       onClose={close}
       header={
         <span className="text-xs font-medium uppercase tracking-wider text-neutral-500">
-          Execution detail
+          Detalle de la ejecución
         </span>
       }
     >

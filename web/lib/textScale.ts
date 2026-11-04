@@ -30,9 +30,9 @@ export type TextScale = (typeof TEXT_SCALES)[number];
 export const DEFAULT_TEXT_SCALE: TextScale = 'default';
 
 export const TEXT_SCALE_LABELS: Record<TextScale, string> = {
-  compact: 'Compact',
-  default: 'Default',
-  large: 'Large',
+  compact: 'Compacto',
+  default: 'Normal',
+  large: 'Grande',
 };
 
 /** Narrow an arbitrary cookie value to a known scale, else the default. */

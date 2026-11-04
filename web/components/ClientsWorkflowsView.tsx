@@ -309,7 +309,7 @@ export function ClientsWorkflowsView({
     <RowMenu
       open={openMenu === menuKey}
       onToggle={() => setOpenMenu(openMenu === menuKey ? null : menuKey)}
-      ariaLabel="Acciones del workflow"
+      ariaLabel="Acciones del flujo"
       align="right"
       width={224}
     >
@@ -372,8 +372,8 @@ export function ClientsWorkflowsView({
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar negocio o workflow"
-            aria-label="Buscar negocio o workflow"
+            placeholder="Buscar negocio o flujo"
+            aria-label="Buscar negocio o flujo"
             className="h-9 w-64 max-w-full rounded-[10px] border border-line-strong bg-surface px-3 text-sm outline-none focus:border-foreground/40"
           />
           <button
@@ -396,7 +396,7 @@ export function ClientsWorkflowsView({
       {!noResults ? (
         folders.length === 0 ? (
           <p className="rounded-[14px] border border-dashed border-line px-4 py-6 text-center text-sm text-faint">
-            Aún no hay negocios. Crea uno con <span className="text-muted">＋ Nuevo negocio</span> y mueve allí sus workflows.
+            Aún no hay negocios. Crea uno con <span className="text-muted">＋ Nuevo negocio</span> y mueve allí sus flujos.
           </p>
         ) : (
           <div className="flex flex-col gap-2.5">
@@ -412,7 +412,7 @@ export function ClientsWorkflowsView({
                       type="button"
                       onClick={() => toggle(folder.id)}
                       aria-expanded={isOpen}
-                      aria-label={`${isOpen ? "Ocultar" : "Ver"} workflows de ${folder.name}`}
+                      aria-label={`${isOpen ? "Ocultar" : "Ver"} flujos de ${folder.name}`}
                       className="flex min-w-0 flex-1 basis-64 items-center gap-3 text-left"
                     >
                       <Chevron open={isOpen} />
@@ -421,7 +421,7 @@ export function ClientsWorkflowsView({
                         <span className="block truncate text-[15px] font-semibold">{folder.name}</span>
                         <span className="flex flex-wrap items-center gap-1.5">
                           <span className="text-xs text-muted">
-                            {renderMeta ? renderMeta(folder) : `${folder.workflowCount} workflow${folder.workflowCount === 1 ? "" : "s"}`}
+                            {renderMeta ? renderMeta(folder) : `${folder.workflowCount} flujo${folder.workflowCount === 1 ? "" : "s"}`}
                           </span>
                           {moduleKeys.includes("crm") ? <ModuleChip label="CRM" /> : null}
                           {moduleKeys.includes("scheduling") ? <ModuleChip label="Agenda" /> : null}
@@ -503,9 +503,9 @@ export function ClientsWorkflowsView({
       {/* Workflows with no business (the default client's), shown as loose files */}
       {!noResults && (visibleLoose.length > 0 || !q) ? (
         <div className="mt-2 flex flex-col gap-2">
-          <h3 className="m-0 text-[12.5px] font-medium text-muted">Workflows sin negocio · {visibleLoose.length}</h3>
+          <h3 className="m-0 text-[12.5px] font-medium text-muted">Flujos sin negocio · {visibleLoose.length}</h3>
           {visibleLoose.length === 0 ? (
-            <p className="rounded-[14px] border border-dashed border-line px-4 py-4 text-center text-sm text-faint">Todos los workflows tienen negocio.</p>
+            <p className="rounded-[14px] border border-dashed border-line px-4 py-4 text-center text-sm text-faint">Todos los flujos tienen negocio.</p>
           ) : (
             <ul className="divide-y divide-line overflow-hidden rounded-[14px] border border-line bg-surface">
               {visibleLoose.map((w) => (
@@ -620,8 +620,8 @@ export function ClientsWorkflowsView({
           title={`¿Eliminar «${deleteTarget.name}»?`}
           body={
             deleteTarget.workflowCount > 0
-              ? `Sus ${deleteTarget.workflowCount} workflow${deleteTarget.workflowCount === 1 ? "" : "s"} quedarán sin negocio. No se puede deshacer.`
-              : "Este negocio no tiene workflows. No se puede deshacer."
+              ? `Sus ${deleteTarget.workflowCount} flujo${deleteTarget.workflowCount === 1 ? "" : "s"} quedarán sin negocio. No se puede deshacer.`
+              : "Este negocio no tiene flujos. No se puede deshacer."
           }
           confirmLabel="Eliminar negocio"
           busy={busy}

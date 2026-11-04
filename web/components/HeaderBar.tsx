@@ -240,7 +240,7 @@ export function HeaderBar({
     currentScope !== "all"
       ? workflows.find((w) => w.id === currentScope && w.clientId === pathClientId) ?? null
       : null;
-  const scopeLabel = currentScope === "all" ? "All workflows" : scopeWorkflow?.name ?? currentScope;
+  const scopeLabel = currentScope === "all" ? "Todos los flujos" : scopeWorkflow?.name ?? currentScope;
 
   const byName = (a: HeaderWorkflow, b: HeaderWorkflow) =>
     (a.name ?? a.id).localeCompare(b.name ?? b.id);
@@ -291,9 +291,9 @@ export function HeaderBar({
         <button
           type="button"
           onClick={() => setMobileOpen(true)}
-          aria-label="Open menu"
-          title="Open menu"
-          className="inline-flex rounded-lg p-1.5 text-muted transition-colors hover:bg-black/[0.05] hover:text-foreground xl:hidden dark:hover:bg-subtle"
+          aria-label="Abrir menú"
+          title="Abrir menú"
+          className="u-tap inline-flex rounded-lg p-1.5 text-muted transition-colors hover:bg-black/[0.05] hover:text-foreground xl:hidden dark:hover:bg-subtle"
         >
           <MenuIcon />
         </button>
@@ -301,8 +301,8 @@ export function HeaderBar({
         <button
           type="button"
           onClick={toggleSidebar}
-          aria-label="Toggle sidebar"
-          title="Toggle sidebar"
+          aria-label="Mostrar u ocultar el menú lateral"
+          title="Mostrar u ocultar el menú lateral"
           className="hidden rounded-lg p-1.5 text-muted transition-colors hover:bg-black/[0.05] hover:text-foreground xl:inline-flex dark:hover:bg-subtle"
         >
           <PanelIcon />
@@ -340,7 +340,7 @@ export function HeaderBar({
                 </>
               )
             ) : (
-              <span className="text-muted">Elige un cliente</span>
+              <span className="text-muted">Elige un negocio</span>
             )}
             <ChevronUpDown />
           </button>

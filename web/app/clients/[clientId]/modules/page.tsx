@@ -45,13 +45,13 @@ export default async function ClientModulesPage({
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-10">
       <ModuleHeader
-        title="Modules"
+        title="Módulos"
         count={enabledCount}
         status={client.name}
-        center={<p className="truncate text-sm text-muted">Identity and product capabilities for this client.</p>}
+        center={<p className="truncate text-sm text-muted">Identidad y funciones del producto para este negocio.</p>}
         actions={
           <Link href={`/clients/${client.id}/workflows`} className={OUTLINE_CLS}>
-            Open workspace
+            Abrir espacio del negocio
           </Link>
         }
       />
@@ -80,20 +80,20 @@ export default async function ClientModulesPage({
               )}
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-foreground">{client.name}</p>
-                <p className="text-xs text-faint">Client workspace</p>
+                <p className="text-xs text-faint">Espacio del negocio</p>
               </div>
             </div>
             <p className="text-xs text-muted">
               {enabledCount === 0
-                ? "No modules enabled yet."
-                : `${enabledCount} module${enabledCount === 1 ? "" : "s"} enabled.`}
+                ? "Todavía no hay módulos activos."
+                : `${enabledCount} ${enabledCount === 1 ? "módulo activo" : "módulos activos"}.`}
             </p>
           </section>
         </aside>
 
         {/* RIGHT — capability cards (the real per-client module toggles). */}
         <section className="flex flex-col gap-3">
-          <h2 className="text-[11px] font-medium uppercase tracking-wider text-faint">Capabilities</h2>
+          <h2 className="text-[11px] font-medium uppercase tracking-wider text-faint">Funciones</h2>
           <ClientModulesPanel clientId={client.id} initialModules={modules} />
         </section>
       </div>

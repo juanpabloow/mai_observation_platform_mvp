@@ -49,11 +49,11 @@ export default async function WorkflowSettingsPickerPage({
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-5 px-6 py-8">
       <ModuleHeader
-        title="Workflow settings"
+        title="Ajustes de flujos"
         count={workflows.length}
         center={
           <p className="truncate text-sm text-muted">
-          Pick a workflow to configure its handoff webhook &amp; field mappings, or use the header switcher.
+          Elige un flujo para configurar su webhook de traspaso y sus mapeos de campos, o usa el selector de la barra superior.
           </p>
         }
       />

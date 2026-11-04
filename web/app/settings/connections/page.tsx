@@ -36,12 +36,12 @@ export default async function ConnectionsSettingsPage() {
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-12">
       <div className="space-y-1">
         <Link href="/" className="text-sm text-neutral-500 transition-colors hover:text-foreground">
-          &larr; Overview
+          &larr; Inicio
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">n8n connections</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Conexiones de n8n</h1>
         <p className="text-sm text-neutral-500">
-          Connect your n8n instance so we can ingest its executions. Your API key is
-          encrypted at rest and never shown again.
+          Conecta tu instancia de n8n para que podamos importar sus ejecuciones. Tu clave de API
+          se guarda cifrada y no se vuelve a mostrar.
         </p>
       </div>
 

@@ -21,27 +21,27 @@ export interface ModuleState {
 const MODULE_COPY: Record<string, { name: string; description: string }> = {
   crm: {
     name: "CRM",
-    description: "Contacts, leads, customer history, and conversation attribution.",
+    description: "Contactos, prospectos, historial de clientes y atribución de conversaciones.",
   },
   scheduling: {
-    name: "Scheduling",
-    description: "Agenda, services, staff, availability, and appointments.",
+    name: "Agenda",
+    description: "Agenda, servicios, profesionales, disponibilidad y citas.",
   },
   inbox: {
     name: "Inbox",
-    description: "Unified conversations and human handoff.",
+    description: "Conversaciones unificadas y paso a una persona.",
   },
   meetings: {
     name: "Reuniones",
-    description: "Meeting recordings, transcripts, summaries, reports, and cited evidence.",
+    description: "Grabaciones de reuniones, transcripciones, resúmenes, informes y evidencia citada.",
   },
   catalog: {
     name: "Productos",
-    description: "A catalogue of what the client sells — name, price, description and availability — that the assistant can read.",
+    description: "Un catálogo de lo que vende el negocio — nombre, precio, descripción y disponibilidad — que el asistente puede leer.",
   },
   campaigns: {
     name: "Campañas",
-    description: "Detected Meta ads grouped into campaigns with a brief for the assistant, plus each contact's lead origin.",
+    description: "Anuncios de Meta detectados, agrupados en campañas con un brief para el asistente, más el origen de cada contacto.",
   },
 };
 
@@ -72,7 +72,7 @@ export function ClientModulesPanel({
         setError(result.error);
       }
     } catch {
-      setError("Could not save. Please try again.");
+      setError("No se pudo guardar. Inténtalo de nuevo.");
     } finally {
       setSavingKey(null);
     }
@@ -102,7 +102,7 @@ export function ClientModulesPanel({
                     m.enabled ? "bg-success/15 text-success" : "bg-subtle text-muted"
                   }`}
                 >
-                  {m.enabled ? "Enabled" : "Disabled"}
+                  {m.enabled ? "Activo" : "Inactivo"}
                 </span>
               </div>
               <p className="mt-1 text-sm text-muted">{copy.description}</p>
@@ -113,7 +113,7 @@ export function ClientModulesPanel({
               role="switch"
               aria-checked={m.enabled}
               aria-busy={saving}
-              aria-label={`${copy.name} ${m.enabled ? "enabled" : "disabled"}`}
+              aria-label={`${copy.name} ${m.enabled ? "activo" : "inactivo"}`}
               disabled={savingKey !== null}
               onClick={() => void toggle(m.key, !m.enabled)}
               className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full border transition-colors disabled:opacity-60 ${
@@ -132,7 +132,7 @@ export function ClientModulesPanel({
         );
       })}
 
-      <p className="text-xs text-faint">Existing data is preserved when a module is disabled.</p>
+      <p className="text-xs text-faint">Los datos existentes se conservan cuando se desactiva un módulo.</p>
     </div>
   );
 }

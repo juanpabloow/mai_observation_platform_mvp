@@ -3,6 +3,9 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { scopeHref } from "@/lib/scopeSurface";
+import { SearchField } from "@/components/ui/module/ModuleSurface";
+import { EmptyState, NoResults } from "@/components/ui/module/States";
+import { Button } from "@/components/ui/controls";
 
 export interface ClientWorkflowRow {
   /** n8n workflow id — the URL segment + the mono id shown on the row. */
@@ -46,31 +49,23 @@ export function ClientWorkflowsList({
   // Empty client (nothing assigned) — distinct from a no-match search below.
   if (workflows.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-line px-6 py-14 text-center">
-        <p className="text-sm font-medium text-muted">No workflows yet</p>
-        <p className="mx-auto mt-1 max-w-md text-sm text-faint">
-          Workflows assigned to this client will appear here. Assign one from{" "}
-          <span className="text-muted">Clients &amp; Workflows</span>.
-        </p>
+      <div className="rounded-2xl border border-line bg-surface">
+        <EmptyState title="Todavía no hay flujos" body="Los flujos asignados a este negocio aparecen aquí. Se asignan desde Inicio, en la fila del negocio." />
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <input
-        type="search"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search workflows…"
-        aria-label="Search workflows"
-        className="h-9 w-full max-w-sm rounded-lg border border-black/10 bg-transparent px-3 text-sm outline-none focus:border-line-strong dark:border-line-strong"
-      />
+      {/* The shared search (Servicios, Productos…): same field, label and clear button. */}
+      <SearchField value={search} onChange={setSearch} label="Buscar flujos" placeholder="Buscar por nombre o ID…" className="max-w-sm" />
 
       {visible.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-faint">
-          No workflows match &ldquo;{search.trim()}&rdquo;.
-        </p>
+        <div className="rounded-2xl border border-line bg-surface">
+          <NoResults body={`Ningún flujo coincide con «${search.trim()}».`}>
+            <Button onClick={() => setSearch("")}>Borrar búsqueda</Button>
+          </NoResults>
+        </div>
       ) : (
         <ul className="divide-y divide-black/5 overflow-hidden rounded-2xl border border-black/10 dark:divide-white/5 dark:border-line">
           {visible.map((w) => (
@@ -84,7 +79,7 @@ export function ClientWorkflowsList({
                     className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                       w.active ? "bg-green-400" : "bg-neutral-500"
                     }`}
-                    title={w.active ? "Active" : "Inactive"}
+                    title={w.active ? "Activo" : "Inactivo"}
                   />
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium text-foreground">
@@ -102,7 +97,7 @@ export function ClientWorkflowsList({
                       : "bg-subtle text-faint"
                   }`}
                 >
-                  {w.active ? "Active" : "Inactive"}
+                  {w.active ? "Activo" : "Inactivo"}
                 </span>
               </Link>
             </li>

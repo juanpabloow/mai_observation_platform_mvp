@@ -70,7 +70,7 @@ test('choosing an option applies it immediately AND persists it', () => {
   assert.ok(menu.includes('document.documentElement.dataset.sidebarTheme = theme'), 'instant visual feedback');
   assert.ok(menu.includes('document.cookie = sidebarThemeCookie(theme)'), 'persisted for the next SSR');
   // The control is labelled exactly as specified and offers both options.
-  assert.ok(menu.includes('Sidebar appearance'), 'the menu row is "Sidebar appearance"');
+  assert.ok(menu.includes('Menú lateral'), 'the menu row is "Menú lateral"');
   assert.ok(menu.includes('SIDEBAR_THEMES.map('), 'both Light and Black are offered');
   assert.ok(menu.includes('aria-pressed={theme === opt}'), 'the active option is exposed to AT');
 });
@@ -219,8 +219,8 @@ test('the repaint kept the stored cookie VALUE, so saved preferences still resol
   // cookie unknown, silently bouncing those users to the default.
   assert.equal(parseSidebarTheme('black'), 'black');
   assert.ok(sidebarThemeCookie('black').startsWith('sidebar-theme=black'));
-  assert.equal(SIDEBAR_THEME_LABELS.black, 'Dark', 'the label is decoupled from the value');
-  assert.equal(SIDEBAR_THEME_LABELS.light, 'Light');
+  assert.equal(SIDEBAR_THEME_LABELS.black, 'Oscuro', 'the label is decoupled from the value');
+  assert.equal(SIDEBAR_THEME_LABELS.light, 'Claro');
   const menu = read('components/AccountMenu.tsx');
   assert.ok(menu.includes('{SIDEBAR_THEME_LABELS[opt]}'), 'the menu renders the label, not the raw value');
 });

@@ -314,12 +314,15 @@ function AdsTab({
               <span className="shrink-0 text-xs text-muted">
                 {visible.length} anuncio{visible.length === 1 ? "" : "s"}
               </span>
-              <input
+              {/* The shared search (same field and clear button as Servicios). On a phone it takes
+                  its own full row: beside the count and «Agregar anuncio» it was ~106px and the
+                  placeholder was cut (auditoría F08). */}
+              <SearchField
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={setSearch}
+                label="Buscar anuncio"
                 placeholder="Buscar por nombre, titular o id…"
-                aria-label="Buscar anuncio"
-                className={`${INPUT} min-w-0 flex-1 bg-subtle/60 sm:max-w-xs`}
+                className="max-sm:order-last max-sm:basis-full sm:max-w-xs"
               />
               {canManage ? (
                 <button type="button" className={BTN} onClick={() => setCreating(true)}>

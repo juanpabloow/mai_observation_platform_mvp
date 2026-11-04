@@ -383,7 +383,7 @@ export function ValueDashboard({
                     <span className={s.kpiLabel}>{k.label}</span>
                     <button
                       type="button"
-                      className={cx(s.infoBtn, "u-focus")}
+                      className={cx(s.infoBtn, "u-focus u-tap")}
                       aria-label={`Qué mide: ${k.label}`}
                       aria-expanded={help === k.id}
                       onClick={() => {

@@ -30,8 +30,8 @@ export const DEFAULT_SIDEBAR_THEME: SidebarTheme = 'black';
  * resolving instead of silently falling back to the default.
  */
 export const SIDEBAR_THEME_LABELS: Record<SidebarTheme, string> = {
-  light: 'Light',
-  black: 'Dark',
+  light: 'Claro',
+  black: 'Oscuro',
 };
 
 /** Narrow an arbitrary cookie value to a known theme, else the default. */

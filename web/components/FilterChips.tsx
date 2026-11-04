@@ -24,7 +24,7 @@ export function FilterChips({ chips, clearAllHref }: { chips: FilterChip[]; clea
           <span className="text-neutral-700 dark:text-foreground">{chip.label}</span>
           <Link
             href={chip.removeHref}
-            aria-label={`Remove filter ${chip.label}`}
+            aria-label={`Quitar filtro ${chip.label}`}
             className="flex size-5 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-black/10 hover:text-foreground dark:hover:bg-subtle"
           >
             ✕
@@ -36,7 +36,7 @@ export function FilterChips({ chips, clearAllHref }: { chips: FilterChip[]; clea
           href={clearAllHref}
           className="rounded-full px-2.5 py-1 text-sm text-neutral-500 transition-colors hover:text-foreground"
         >
-          Clear all
+          Quitar todos
         </Link>
       ) : null}
     </div>

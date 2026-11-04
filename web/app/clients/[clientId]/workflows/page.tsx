@@ -52,11 +52,11 @@ export default async function ClientWorkflowsPage({
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-5 px-6 py-8">
       <ModuleHeader
-        title="Workflows"
+        title="Flujos"
         count={workflows.length}
         center={
           <p className="truncate text-sm text-muted">
-          Pick a workflow to see its executions and analytics, or use the header switcher.
+          Elige un flujo para ver sus ejecuciones y su analítica, o usa el selector de la barra superior.
           </p>
         }
       />

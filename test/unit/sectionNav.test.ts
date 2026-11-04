@@ -50,7 +50,7 @@ test('agency on a client with every module: the three blocks of the proposal + M
   });
   const labels = Object.fromEntries(buildSections(agency(ALL)).map((x) => [x.id, x.pages.map((p) => p.label)]));
   assert.deepEqual(labels.agenda, ['Calendario', 'Ocupación', 'Equipo', 'Horarios y ausencias']);
-  assert.deepEqual(labels.automations, ['Workflows', 'Costos de IA', 'Reuniones']);
+  assert.deepEqual(labels.automations, ['Flujos', 'Costos de IA', 'Reuniones']);
   assert.deepEqual(rail(agency(ALL)), [
     'Inbox', 'Contactos', 'Agenda', 'Catálogo', 'Presencia y marketing', 'Dashboard de valor', 'Configuración', 'Automatizaciones', 'Módulos',
   ]);

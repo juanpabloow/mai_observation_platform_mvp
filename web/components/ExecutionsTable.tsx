@@ -11,7 +11,7 @@ import {
   type OnChangeFn,
   type SortingState,
 } from "@tanstack/react-table";
-import { statusBadgeClasses } from "@/lib/format";
+import { executionStatusLabel, statusBadgeClasses } from "@/lib/format";
 import type { CustomCell } from "@/lib/fieldCatalog";
 
 /**
@@ -44,27 +44,27 @@ const columnHelper = createColumnHelper<ExecutionRowView>();
 const FIXED_COLUMNS = [
   columnHelper.accessor("status", {
     id: "status",
-    header: "Status",
+    header: "Estado",
     cell: (info) => (
-      <span className={statusBadgeClasses(info.getValue())}>{info.getValue()}</span>
+      <span className={statusBadgeClasses(info.getValue())}>{executionStatusLabel(info.getValue())}</span>
     ),
   }),
   columnHelper.accessor("startedDisplay", {
     id: "started_at",
-    header: "Started",
+    header: "Inicio",
     // Wide enough to never wrap the timestamp.
     cell: (info) => <span className="whitespace-nowrap text-muted">{info.getValue()}</span>,
   }),
   columnHelper.accessor("durationDisplay", {
     id: "duration_ms",
-    header: "Duration",
+    header: "Duración",
     cell: (info) => (
       <span className="tabular-nums text-muted">{info.getValue()}</span>
     ),
   }),
   columnHelper.accessor("executionId", {
     id: "execution_id",
-    header: "Execution ID",
+    header: "ID de ejecución",
     enableSorting: false,
     cell: (info) => (
       <span className="font-mono text-xs text-neutral-500">{info.getValue()}</span>
@@ -242,7 +242,7 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
                 colSpan={FIXED_COLUMNS.length + customColumns.length}
                 className="px-3 py-12 text-center text-sm text-neutral-500"
               >
-                No executions match these filters.
+                Ninguna ejecución coincide con estos filtros.
               </td>
             </tr>
           ) : (
