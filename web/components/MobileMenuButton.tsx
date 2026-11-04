@@ -17,7 +17,7 @@ export function MobileMenuButton({ className = "" }: { className?: string }) {
       data-integrated-nav=""
       onClick={() => setMobileOpen(true)}
       aria-label="Abrir menú"
-      className={`flex size-9 flex-none items-center justify-center rounded-full bg-m-sf2 text-m-tx ${className}`}
+      className={`u-tap flex size-9 flex-none items-center justify-center rounded-full bg-m-sf2 text-m-tx ${className}`}
     >
       <svg aria-hidden viewBox="0 0 20 20" className="size-[18px]" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
         <path d="M3.5 6h13M3.5 10h13M3.5 14h13" />

@@ -320,7 +320,7 @@ test('contacts: the controls are ONE row each, and share one height', () => {
   // PHONE (< md): the header's opt-in two-row layout puts the search beside Filtrar and
   // `···` (at 360px a 15rem floor pushed them over the title), so the floor there is 8rem
   // — still never just its icon. From md up the 15rem floor holds.
-  assert.ok(toolbar.includes('min-w-[8rem] flex-1') && toolbar.includes('md:min-w-[15rem]'), 'the search has a floor at every width (8rem on phones, 15rem from md) and takes the slack');
+  assert.ok(toolbar.includes('min-w-[8rem] flex-1') && toolbar.includes('md:min-w-[min(15rem,100%)]'), 'the search has a floor at every width (8rem on phones, 15rem from md — never wider than its slot) and takes the slack');
   assert.ok(!/max-w-\[420px\]/.test(toolbar), 'and it is no longer capped at 420px');
   // The COMPACT form (detail panel open) keeps its cap, or the row cannot fit.
   assert.ok(toolbar.includes('compact ? "max-w-[240px]" : ""'), 'only the compact form is capped');

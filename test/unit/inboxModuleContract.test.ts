@@ -92,5 +92,5 @@ test('disable policy + owner/admin-only toggle are wired in the module action', 
 
 test('Modules panel exposes the Inbox card copy', () => {
   const src = read('web/components/ClientModulesPanel.tsx');
-  assert.ok(src.includes('Unified conversations and human handoff'), 'inbox card description');
+  assert.ok(src.includes('Conversaciones unificadas y paso a una persona'), 'inbox card description');
 });

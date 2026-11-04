@@ -7,7 +7,7 @@ import {
   listThreadMessages,
 } from "@worker/db/repositories/handoff.js";
 import { parseExecution } from "@/lib/executionDetail";
-import { formatDateTime, formatDuration, statusBadgeClasses } from "@/lib/format";
+import { executionStatusLabel, formatDateTime, formatDuration, statusBadgeClasses } from "@/lib/format";
 import { toMessageView } from "@/lib/inboxData";
 import { ChatScroll } from "@/components/ChatScroll";
 import { ChatTranscript } from "@/components/ChatTranscript";
@@ -200,15 +200,15 @@ export async function ExecutionDetailPanel({
       {/* Summary — FLAT, full-width: status + id on one line, facts as a compact grid. */}
       <section className="border-b border-line px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className={statusBadgeClasses(execution.status)}>{execution.status}</span>
+          <span className={statusBadgeClasses(execution.status)}>{executionStatusLabel(execution.status)}</span>
           <span className="font-mono text-[11px] text-faint">{execution.n8n_execution_id}</span>
         </div>
         <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2">
-          <Field label="Started" value={formatDateTime(execution.started_at)} />
-          <Field label="Duration" value={formatDuration(execution.duration_ms)} />
-          <Field label="Mode" value={execution.mode ?? "—"} />
+          <Field label="Inicio" value={formatDateTime(execution.started_at)} />
+          <Field label="Duración" value={formatDuration(execution.duration_ms)} />
+          <Field label="Modo" value={execution.mode ?? "—"} />
           <Field
-            label="Stopped"
+            label="Fin"
             value={execution.stopped_at ? formatDateTime(execution.stopped_at) : "—"}
           />
         </dl>
@@ -220,15 +220,15 @@ export async function ExecutionDetailPanel({
       {/* Nodes — joined flat rows. */}
       <section className="px-4 py-3">
         <div className="mb-2 flex items-baseline justify-between">
-          <h3 className="text-xs font-medium uppercase tracking-wider text-neutral-500">Nodes</h3>
+          <h3 className="text-xs font-medium uppercase tracking-wider text-neutral-500">Nodos</h3>
           {parsed.hasRunData ? (
-            <span className="text-[11px] text-neutral-500">{parsed.nodes.length} executed</span>
+            <span className="text-[11px] text-neutral-500">{parsed.nodes.length} {parsed.nodes.length === 1 ? "ejecutado" : "ejecutados"}</span>
           ) : null}
         </div>
         {parsed.hasRunData ? (
           <NodeSections nodes={nodeViews} />
         ) : (
-          <p className="text-sm text-neutral-500">No node-level data captured for this execution.</p>
+          <p className="text-sm text-neutral-500">No se capturaron datos por nodo en esta ejecución.</p>
         )}
       </section>
     </div>

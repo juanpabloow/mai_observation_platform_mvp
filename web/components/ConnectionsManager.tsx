@@ -28,7 +28,7 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
     try {
       const res = await addConnectionAction({ name, baseUrl, apiKey });
       if (!res.ok) {
-        setError(res.error ?? "Could not add the connection.");
+        setError(res.error ?? "No se pudo agregar la conexión.");
         return;
       }
       // Clear inputs — especially the key — from client state on success.
@@ -38,7 +38,7 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
       setOk(true);
       router.refresh();
     } catch {
-      setError("Something went wrong. Please try again.");
+      setError("Algo salió mal. Inténtalo de nuevo.");
     } finally {
       setBusy(false);
     }
@@ -70,11 +70,11 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
                         : "bg-subtle text-neutral-500"
                     }`}
                   >
-                    {c.is_active ? "active" : "inactive"}
+                    {c.is_active ? "activa" : "inactiva"}
                   </span>
                 </div>
                 <div className="mt-0.5 truncate font-mono text-xs text-neutral-500">
-                  {c.n8n_base_url} · key ••••••••
+                  {c.n8n_base_url} · clave ••••••••
                 </div>
               </div>
               <button
@@ -83,7 +83,7 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
                 onClick={() => toggle(c.id, !c.is_active)}
                 className="shrink-0 rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] disabled:opacity-50 dark:border-line-strong dark:hover:bg-subtle"
               >
-                {c.is_active ? "Deactivate" : "Activate"}
+                {c.is_active ? "Desactivar" : "Activar"}
               </button>
             </li>
           ))}
@@ -94,30 +94,30 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
         onSubmit={onAdd}
         className="flex flex-col gap-3 rounded-xl border border-black/10 p-4 dark:border-line"
       >
-        <h3 className="text-sm font-semibold">Add a connection</h3>
+        <h3 className="text-sm font-semibold">Agregar una conexión</h3>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted">Name</span>
+          <span className="text-muted">Nombre</span>
           <input
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Production n8n"
+            placeholder="n8n de producción"
             className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none focus:border-line-strong"
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted">n8n base URL</span>
+          <span className="text-muted">URL base de n8n</span>
           <input
             required
             type="url"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://your-n8n.example.com"
+            placeholder="https://tu-n8n.ejemplo.com"
             className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none focus:border-line-strong"
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted">n8n API key</span>
+          <span className="text-muted">Clave de API de n8n</span>
           <input
             required
             type="password"
@@ -128,7 +128,7 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
             className="rounded-lg border border-line bg-transparent px-3 py-2 font-mono outline-none focus:border-line-strong"
           />
           <span className="text-xs text-faint">
-            Stored encrypted; we verify it works before saving and never show it again.
+            Se guarda cifrada; comprobamos que funcione antes de guardarla y no se vuelve a mostrar.
           </span>
         </label>
 
@@ -139,7 +139,7 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
         ) : null}
         {ok ? (
           <p className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-success">
-            Connection added — the worker will start ingesting shortly.
+            Conexión agregada: la importación de ejecuciones empezará en breve.
           </p>
         ) : null}
 
@@ -148,7 +148,7 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
           disabled={busy}
           className="self-start rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
         >
-          {busy ? "Verifying…" : "Add connection"}
+          {busy ? "Verificando…" : "Agregar conexión"}
         </button>
       </form>
     </div>

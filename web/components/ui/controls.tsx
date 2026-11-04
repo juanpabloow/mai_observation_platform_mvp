@@ -123,7 +123,7 @@ export function IconButton({
       title={label}
       onClick={onClick}
       disabled={disabled}
-      className={`u-focus inline-flex size-[44px] shrink-0 items-center justify-center rounded-sch-control transition-colors disabled:cursor-not-allowed disabled:opacity-50 lg:size-[36px] ${BUTTON_VARIANT[variant]}`}
+      className={`u-focus u-tap inline-flex size-[44px] shrink-0 items-center justify-center rounded-sch-control transition-colors disabled:cursor-not-allowed disabled:opacity-50 lg:size-[36px] ${BUTTON_VARIANT[variant]}`}
     >
       <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5">
         {children}
@@ -208,7 +208,7 @@ export function segmentShell(size: ButtonSize = "md"): string {
   return `inline-flex shrink-0 items-center gap-0.5 rounded-sch-control border border-line bg-chip p-1 ${size === "sm" ? "h-[44px] lg:h-[36px]" : "h-[44px] lg:h-[40px]"}`;
 }
 export function segmentClass(active: boolean): string {
-  return `u-focus flex h-full items-center rounded-[calc(var(--sch-radius-control)-4px)] px-3 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+  return `u-focus u-tap flex h-full items-center rounded-[calc(var(--sch-radius-control)-4px)] px-3 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
     active ? "bg-ink text-ink-fg" : "text-muted hover:text-foreground"
   }`;
 }

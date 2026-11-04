@@ -149,7 +149,7 @@ export function ColumnsMenu({
         className="inline-flex items-center gap-1.5 rounded-lg border border-black/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
         aria-expanded={open}
       >
-        <span aria-hidden>＋</span> Add column
+        <span aria-hidden>＋</span> Agregar columna
       </button>
 
       {open && typeof document !== "undefined"
@@ -169,7 +169,7 @@ export function ColumnsMenu({
                 <div className="flex max-h-80 flex-col overflow-y-auto py-1">
                   {columns.length > 0 ? (
                     <>
-                      <GroupLabel>Your columns</GroupLabel>
+                      <GroupLabel>Tus columnas</GroupLabel>
                       {columns.map((c) => (
                         <div
                           key={c.id}
@@ -180,7 +180,7 @@ export function ColumnsMenu({
                             type="button"
                             disabled={busy}
                             onClick={() => remove(c.id)}
-                            aria-label={`Remove ${c.columnLabel ?? c.jsonPath}`}
+                            aria-label={`Quitar ${c.columnLabel ?? c.jsonPath}`}
                             className="shrink-0 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-red-500/10 hover:text-danger disabled:opacity-50"
                           >
                             ✕
@@ -190,11 +190,11 @@ export function ColumnsMenu({
                     </>
                   ) : null}
 
-                  <GroupLabel>Add from a node</GroupLabel>
+                  <GroupLabel>Agregar desde un nodo</GroupLabel>
                   {loading ? (
-                    <p className="px-3 py-2 text-xs text-neutral-500">Loading fields…</p>
+                    <p className="px-3 py-2 text-xs text-neutral-500">Cargando campos…</p>
                   ) : catalog.length === 0 ? (
-                    <p className="px-3 py-2 text-xs text-neutral-500">No fields available yet.</p>
+                    <p className="px-3 py-2 text-xs text-neutral-500">Todavía no hay campos disponibles.</p>
                   ) : (
                     catalog.map((n) => (
                       <FieldButton
@@ -215,7 +215,7 @@ export function ColumnsMenu({
               ) : view === "fields" ? (
                 <div className="flex max-h-80 flex-col overflow-y-auto py-1">
                   <BackButton onClick={() => setView("root")} />
-                  <GroupLabel>{node?.displayName ?? "Fields"}</GroupLabel>
+                  <GroupLabel>{node?.displayName ?? "Campos"}</GroupLabel>
                   {node && node.fields.length > 0 ? (
                     node.fields.map((f) => (
                       <button
@@ -235,7 +235,7 @@ export function ColumnsMenu({
                       </button>
                     ))
                   ) : (
-                    <p className="px-3 py-2 text-xs text-neutral-500">No simple fields.</p>
+                    <p className="px-3 py-2 text-xs text-neutral-500">No hay campos simples.</p>
                   )}
                 </div>
               ) : (
@@ -245,7 +245,7 @@ export function ColumnsMenu({
                     {node?.displayName} · {field?.jsonPath}
                   </div>
                   <label className="flex flex-col gap-1 text-xs text-neutral-500">
-                    Column name
+                    Nombre de la columna
                     <input
                       autoFocus
                       value={label}
@@ -259,7 +259,7 @@ export function ColumnsMenu({
                     disabled={busy}
                     className="self-start rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
                   >
-                    {busy ? "Saving…" : "Add column"}
+                    {busy ? "Guardando…" : "Agregar columna"}
                   </button>
                 </div>
               )}
@@ -298,7 +298,7 @@ function BackButton({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       className="mx-3 mb-1 mt-1 flex items-center gap-1 self-start text-xs text-neutral-500 transition-colors hover:text-foreground"
     >
-      <span aria-hidden>‹</span> Back
+      <span aria-hidden>‹</span> Atrás
     </button>
   );
 }

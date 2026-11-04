@@ -19,7 +19,7 @@ import {
 import { config } from "@worker/config.js";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
-import { formatDateTime, formatDuration } from "@/lib/format";
+import { executionStatusLabel, formatDateTime, formatDuration } from "@/lib/format";
 import {
   buildExecutionResolver,
   extractMapping,
@@ -273,17 +273,17 @@ export default async function WorkflowExecutionsPage({
     return qs ? `${basePath}?${qs}` : basePath;
   };
   const opText = (op: string, val?: string) =>
-    op === "not_empty" ? "is not empty" : op === "contains" ? `contains "${val}"` : `equals ${val}`;
+    op === "not_empty" ? "no está vacío" : op === "contains" ? `contiene "${val}"` : `es igual a ${val}`;
 
   const chips: FilterChip[] = [];
   if (filters.status) {
-    chips.push({ label: `Status: ${filters.status}`, removeHref: hrefWithout((p) => p.delete("status")) });
+    chips.push({ label: `Estado: ${executionStatusLabel(filters.status)}`, removeHref: hrefWithout((p) => p.delete("status")) });
   }
   if (filters.fromDate) {
-    chips.push({ label: `Started ≥ ${filters.fromDate}`, removeHref: hrefWithout((p) => p.delete("from")) });
+    chips.push({ label: `Inicio ≥ ${filters.fromDate}`, removeHref: hrefWithout((p) => p.delete("from")) });
   }
   if (filters.toDate) {
-    chips.push({ label: `Started ≤ ${filters.toDate}`, removeHref: hrefWithout((p) => p.delete("to")) });
+    chips.push({ label: `Inicio ≤ ${filters.toDate}`, removeHref: hrefWithout((p) => p.delete("to")) });
   }
   for (const raw of [...new Set(all(sp.cf))]) {
     const i1 = raw.indexOf(":");
@@ -322,7 +322,7 @@ export default async function WorkflowExecutionsPage({
           screen readers, so the name is never drawn twice. */}
       <div className="u-topbar-fallback items-center gap-1.5 px-4 pt-4 text-sm">
         <Link href={`/clients/${linkClientId}/workflows`} className="u-focus rounded text-muted hover:text-foreground">
-          Workflows
+          Flujos
         </Link>
         <span aria-hidden className="text-faint">/</span>
         <h1 className="truncate font-semibold text-foreground">
@@ -358,7 +358,7 @@ export default async function WorkflowExecutionsPage({
 
         <nav className="mt-4 flex items-center justify-between text-sm">
           <span className="text-neutral-500">
-            Page {page} of {totalPages} · {total.toLocaleString()} total
+            Página {page} de {totalPages} · {total.toLocaleString("es-CO")} en total
           </span>
           <div className="flex items-center gap-2">
             {hasPrev ? (
@@ -366,11 +366,11 @@ export default async function WorkflowExecutionsPage({
                 href={pageHref(page - 1)}
                 className="rounded-lg border border-black/10 px-3 py-1.5 transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
               >
-                &larr; Previous
+                &larr; Anterior
               </Link>
             ) : (
               <span className="cursor-not-allowed rounded-lg border border-black/5 px-3 py-1.5 text-faint dark:border-line">
-                &larr; Previous
+                &larr; Anterior
               </span>
             )}
             {hasNext ? (
@@ -378,11 +378,11 @@ export default async function WorkflowExecutionsPage({
                 href={pageHref(page + 1)}
                 className="rounded-lg border border-black/10 px-3 py-1.5 transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
               >
-                Next &rarr;
+                Siguiente &rarr;
               </Link>
             ) : (
               <span className="cursor-not-allowed rounded-lg border border-black/5 px-3 py-1.5 text-faint dark:border-line">
-                Next &rarr;
+                Siguiente &rarr;
               </span>
             )}
           </div>

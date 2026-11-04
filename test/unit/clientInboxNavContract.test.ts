@@ -72,7 +72,7 @@ test('sidebar: Automatizaciones = Workflows + Costos de IA + Reuniones; the Dash
   // Workflows (their executions) and the value dashboard are INSIGHTS (agency/owner) —
   // a Setter never sees them. Both workflow entries follow the remembered scope.
   assert.ok(model.includes('const p = (key: string) => forOwnClient && permissions.includes(key);'), 'pages read the login\'s permissions on its own client');
-  assert.ok(model.includes('p("automations.view") && { id: "workflows", label: "Workflows", href: wf.executions }'), 'Workflows is automations.view, scope-aware');
+  assert.ok(model.includes('p("automations.view") && { id: "workflows", label: "Flujos", href: wf.executions }'), 'Flujos is automations.view, scope-aware');
   assert.ok(!model.includes('"tech-analytics"'), 'Analíticas técnicas is gone (folded into Costos de IA → Ejecuciones)');
   assert.ok(model.includes('p("analytics.view") && !isDefault && { id: "ai-costs", label: "Costos de IA", href: c("/costos-ia") }'), 'Costos de IA (and its Ejecuciones view) is analytics.view');
   assert.ok(model.includes('results: [p("analytics.view") && { id: "value", label: "Dashboard de valor", href: c("/analytics") }]'), 'the value dashboard is analytics.view');
@@ -167,10 +167,10 @@ test('sidebar server: never serializes any workflow list (member gets no foreign
 
 test('switcher panel: search + Active/Inactive groups + accessible listbox', () => {
   const src = read('components/WorkflowSwitcherPanel.tsx');
-  assert.ok(src.includes('placeholder="Search workflows…"'), 'has a Search workflows… field');
+  assert.ok(src.includes('placeholder="Buscar flujos…"') && src.includes('aria-label="Buscar flujos"'), 'has a «Buscar flujos…» field with an accessible name');
   assert.ok(src.includes('role="combobox"') && src.includes('aria-activedescendant'), 'combobox + activedescendant');
   assert.ok(src.includes('role="listbox"') && src.includes('role="option"'), 'listbox with option roles');
-  assert.ok(src.includes('aria-label="Active"') && src.includes('aria-label="Inactive"'), 'Active/Inactive groups');
+  assert.ok(src.includes('aria-label="Activos"') && src.includes('aria-label="Inactivos"'), 'Activos/Inactivos groups');
   // Grouping is by the workflow active flag.
   assert.ok(src.includes('(w.active ?? false) && matchWf(w)'), 'Active group = active workflows');
   assert.ok(src.includes('!(w.active ?? false) && matchWf(w)'), 'Inactive group = inactive workflows');
@@ -183,7 +183,7 @@ test('switcher panel: a pure scope PICKER (emits onSelect(scope)); builds no rou
   // and the host (HeaderBar) turns that into a route via scopeHref, preserving the
   // current section. So the panel itself must contain NO /workflows route strings.
   const src = read('components/WorkflowSwitcherPanel.tsx');
-  assert.ok(src.includes('scope: "all", label: "All workflows"'), '"All workflows" is the first option (scope "all")');
+  assert.ok(src.includes('scope: "all", label: "Todos los flujos"'), '«Todos los flujos» is the first option (scope "all")');
   assert.ok(src.includes('scope: w.id'), 'each workflow option carries its id as the scope');
   assert.ok(src.includes('onSelect(o.scope)'), 'selecting an option emits onSelect(scope)');
   assert.ok(src.includes('o.scope === currentScope'), 'the current scope is marked (✓)');
@@ -235,15 +235,15 @@ test('workflows page: session-authorized, filtered to this client, searchable li
   assert.ok(page.includes('<ClientWorkflowsList'), 'renders the list component');
 
   const list = read('components/ClientWorkflowsList.tsx');
-  assert.ok(list.includes('placeholder="Search workflows…"'), 'has a search field');
-  assert.ok(list.includes('Active') && list.includes('Inactive'), 'shows active/inactive status');
+  assert.ok(list.includes('<SearchField') && list.includes('label="Buscar flujos"'), 'has the shared search field');
+  assert.ok(list.includes('"Activo"') && list.includes('"Inactivo"'), 'shows active/inactive status');
   assert.ok(list.includes('w.n8nWorkflowId'), 'shows the workflow id');
   // W-1: rows link through the single scopeHref() source of truth; the default section
   // is "executions", so a row opens that workflow's Executions (the /executions literal
   // now lives in scopeSurface, exercised by its own tests).
   assert.ok(list.includes('scopeHref(clientId, section, w.n8nWorkflowId)'), 'rows link via scopeHref');
   assert.ok(list.includes('section = "executions"'), 'rows default to the workflow Executions');
-  assert.ok(list.includes('No workflows yet'), 'has an empty state');
+  assert.ok(list.includes('<EmptyState title="Todavía no hay flujos"'), 'has an empty state');
 });
 
 // ───────────────────── Preserved: unified Inbox + legacy routes ───────────────

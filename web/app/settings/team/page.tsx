@@ -9,7 +9,7 @@ import { TeamMembers, type MemberRole, type TeamMemberView } from "@/components/
 import { TeamInvitations, type TeamInviteView } from "@/components/TeamInvitations";
 
 function fmtDate(d: Date): string {
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString("es-CO", { month: "short", day: "numeric", year: "numeric" });
 }
 
 /**
@@ -28,7 +28,7 @@ export default async function TeamSettingsPage() {
     listInvitationsForTenant(scope.tenantId),
   ]);
 
-  const clientOptions = clients.map((c) => ({ id: c.id, name: c.is_default ? "Unassigned" : c.name }));
+  const clientOptions = clients.map((c) => ({ id: c.id, name: c.is_default ? "Sin asignar" : c.name }));
 
   // ADMINS ONLY: the owner + admins (members are managed per-client).
   const adminViews: TeamMemberView[] = members
@@ -72,17 +72,17 @@ export default async function TeamSettingsPage() {
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-12">
       <div className="space-y-1">
         <Link href="/" className="text-sm text-muted transition-colors hover:text-foreground">
-          &larr; Hub
+          &larr; Inicio
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">Admins</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Equipo de la agencia</h1>
         <p className="text-sm text-muted">
-          Admins have full access to the workspace. Members are scoped to one client and managed on
-          each client&rsquo;s Team page.
+          Los administradores tienen acceso completo a la plataforma. Los miembros se limitan a un negocio
+          y se gestionan en la página de equipo de cada negocio.
         </p>
       </div>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Owner &amp; admins</h2>
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Dueño y administradores</h2>
         <TeamMembers
           members={adminViews}
           clients={clientOptions}
@@ -91,12 +91,12 @@ export default async function TeamSettingsPage() {
       </section>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Invite an admin</h2>
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Invitar a un administrador</h2>
         {isOwner ? (
           <InviteForm mode="admin" />
         ) : (
           <p className="rounded-2xl border border-dashed border-line px-4 py-6 text-sm text-faint">
-            Only the workspace owner can invite or change admins.
+            Solo el dueño de la plataforma puede invitar o cambiar administradores.
           </p>
         )}
       </section>

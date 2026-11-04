@@ -86,16 +86,16 @@ test('the agenda page: staff see the whole SITE, identities hidden, no CRM/inbox
 
 test('team UI + sidebar speak client roles (owner/setter/staff)', () => {
   const invite = read('web/components/InviteForm.tsx');
-  assert.match(invite, /<option value="setter">Setter/);
+  assert.match(invite, /<option value="setter">Recepción/);
   assert.doesNotMatch(invite, /value="editor"/);
-  assert.match(invite, /<option value="staff">Staff/);
-  assert.match(invite, /canInviteOwner \? <option value="owner">Owner/);
+  assert.match(invite, /<option value="staff">Profesional/);
+  assert.match(invite, /canInviteOwner \? <option value="owner">Dueño/);
   assert.match(invite, /clientRole: role/);
   assert.doesNotMatch(invite, /reception/i);
 
   const members = read('web/components/TeamMembers.tsx');
   assert.match(members, /changeClientRoleAction/);
-  assert.match(members, /Save role/);
+  assert.match(members, /Guardar rol/);
   assert.doesNotMatch(members, /setMemberSchedulingAccessAction/);
 
   // The rail reads permissions + the staff binding (lib/sectionNav.ts), never role names.

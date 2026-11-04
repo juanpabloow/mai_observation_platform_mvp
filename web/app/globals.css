@@ -1547,7 +1547,13 @@ body {
   color: var(--timeoff-fg);
 }
 
-/* Minimum 40px touch target for compact icon controls, without changing layout. */
+/*
+ * TOUCH TARGET for compact icon controls, without changing their drawing or the layout: an
+ * invisible ::after that receives the clicks for its element. 40px with a fine pointer; the
+ * product's 44×44 (auditoría UI 2026-11-03, F05) on phones and tablets AND on any device with
+ * a coarse pointer — a touch laptop or a tablet in landscape is wide but still a finger, so
+ * the width alone cannot decide it. Desktop density is untouched: nothing visible grows.
+ */
 .u-tap {
   position: relative;
 }
@@ -1558,6 +1564,12 @@ body {
   width: max(100%, 40px);
   height: max(100%, 40px);
   transform: translate(-50%, -50%);
+}
+@media (max-width: 1023.98px), (any-pointer: coarse) {
+  .u-tap::after {
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+  }
 }
 
 /* Honor reduced motion globally for the redesigned surfaces' transitions. */

@@ -85,8 +85,8 @@ export function AgencyHomeView({ home, firstName, today }: { home: AgencyHome; f
         colorOf={(id) => byId.get(id)?.color ?? null}
         renderMeta={(f) => {
           const b = byId.get(f.id);
-          if (!b || b.workflows === 0) return "Sin workflows asignados";
-          return `${nf.format(b.executions30d)} ejecuciones en 30 días · ${b.workflows} workflow${b.workflows === 1 ? "" : "s"}`;
+          if (!b || b.workflows === 0) return "Sin flujos asignados";
+          return `${nf.format(b.executions30d)} ejecuciones en 30 días · ${b.workflows} flujo${b.workflows === 1 ? "" : "s"}`;
         }}
         renderDoors={(f) => {
           const b = byId.get(f.id);
@@ -141,7 +141,7 @@ export function AgencyHomeView({ home, firstName, today }: { home: AgencyHome; f
             <span>
               <span className={h.toolName}>Conexiones de n8n</span>
               <span className={h.toolLine}>
-                {nf.format(home.agency.workflows)} workflows sincronizados
+                {nf.format(home.agency.workflows)} {home.agency.workflows === 1 ? "flujo sincronizado" : "flujos sincronizados"}
               </span>
             </span>
           </Link>

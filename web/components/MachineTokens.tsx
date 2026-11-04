@@ -99,7 +99,7 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
       setIssueCaps(new Set(DEFAULT_CAPS));
       router.refresh();
     } catch {
-      setError("Something went wrong issuing the token.");
+      setError("Algo salió mal al emitir el token.");
     } finally {
       setBusyId(null);
     }
@@ -111,13 +111,13 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
     try {
       const res = await updateTokenCapabilitiesAction(tokenId, [...editCaps]);
       if (!res.ok) {
-        setError(res.error ?? "Could not update the token.");
+        setError(res.error ?? "No se pudo actualizar el token.");
         return;
       }
       setEditingToken(null);
       router.refresh();
     } catch {
-      setError("Something went wrong updating the token.");
+      setError("Algo salió mal al actualizar el token.");
     } finally {
       setBusyId(null);
     }
@@ -129,12 +129,12 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
     try {
       const res = await revokeTokenAction(tokenId);
       if (!res.ok) {
-        setError("Could not revoke the token — it may already be revoked.");
+        setError("No se pudo revocar el token; puede que ya esté revocado.");
         return;
       }
       router.refresh();
     } catch {
-      setError("Something went wrong revoking the token.");
+      setError("Algo salió mal al revocar el token.");
     } finally {
       setBusyId(null);
       setConfirmRevoke(null);
@@ -156,11 +156,11 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
   return (
     <section className="flex flex-col gap-4">
       <div className="space-y-1">
-        <h2 className="text-lg font-semibold tracking-tight">Machine tokens</h2>
+        <h2 className="text-lg font-semibold tracking-tight">Tokens de máquina</h2>
         <p className="text-sm text-neutral-500">
-          Machine tokens let your n8n workflows call the handoff, scheduling, CRM and catalog APIs.
-          Each token is scoped to one connection and only its workflows, and grants only
-          the capabilities you pick. The full token is shown once, at creation.
+          Los tokens de máquina permiten que tus flujos de n8n llamen a las API de paso a persona, agenda,
+          CRM y catálogo. Cada token se limita a una conexión y solo a sus flujos, y concede únicamente
+          las funciones que elijas. El token completo se muestra una sola vez, al crearlo.
         </p>
       </div>
 
@@ -182,14 +182,14 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
                 }}
                 className="shrink-0 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:opacity-90"
               >
-                Issue token
+                Emitir token
               </button>
             )}
           </div>
 
           {issuingConn === conn.connectionId ? (
             <div className="flex flex-col gap-3 rounded-lg border border-line bg-subtle/40 p-3">
-              <p className="text-xs font-medium uppercase tracking-wider text-faint">Capabilities</p>
+              <p className="text-xs font-medium uppercase tracking-wider text-faint">Funciones</p>
               <CapabilityPicker selected={issueCaps} onToggle={(k) => toggle(issueCaps, setIssueCaps, k)} />
               <div className="flex items-center gap-2">
                 <button
@@ -198,10 +198,10 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
                   onClick={() => issue(conn.connectionId)}
                   className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
                 >
-                  {busyId === `issue:${conn.connectionId}` ? "Issuing…" : "Create token"}
+                  {busyId === `issue:${conn.connectionId}` ? "Emitiendo…" : "Crear token"}
                 </button>
                 <button type="button" onClick={() => setIssuingConn(null)} className="text-xs text-faint hover:text-foreground">
-                  Cancel
+                  Cancelar
                 </button>
               </div>
             </div>
@@ -216,33 +216,33 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-sm">{t.prefix}…</span>
                         {t.revoked ? (
-                          <span className="rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-danger">revoked</span>
+                          <span className="rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-danger">revocado</span>
                         ) : (
-                          <span className="rounded-full bg-green-500/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-success">active</span>
+                          <span className="rounded-full bg-green-500/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-success">activo</span>
                         )}
                       </div>
                       <div className="mt-0.5 text-xs text-neutral-500">
-                        Created {fmtDate(t.createdAt)} · {t.lastUsedAt ? `last used ${fmtDateTime(t.lastUsedAt)}` : "never used"}
+                        Creado {fmtDate(t.createdAt)} · {t.lastUsedAt ? `último uso ${fmtDateTime(t.lastUsedAt)}` : "sin usar"}
                       </div>
                     </div>
                     {!t.revoked ? (
                       confirmRevoke === t.id ? (
                         <div className="flex shrink-0 items-center gap-2">
-                          <span className="text-xs text-muted">Revoke this token?</span>
+                          <span className="text-xs text-muted">¿Revocar este token?</span>
                           <button type="button" disabled={busyId === `revoke:${t.id}`} onClick={() => revoke(t.id)} className="rounded-lg border border-red-500/40 px-2.5 py-1 text-xs text-danger transition-colors hover:bg-red-500/10 disabled:opacity-50">
-                            {busyId === `revoke:${t.id}` ? "Revoking…" : "Confirm"}
+                            {busyId === `revoke:${t.id}` ? "Revocando…" : "Confirmar"}
                           </button>
                           <button type="button" onClick={() => setConfirmRevoke(null)} className="rounded-lg border border-black/10 px-2.5 py-1 text-xs transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle">
-                            Cancel
+                            Cancelar
                           </button>
                         </div>
                       ) : (
                         <div className="flex shrink-0 items-center gap-1.5">
                           <button type="button" onClick={() => { setEditingToken(t.id); setEditCaps(new Set(t.capabilities)); setError(null); }} className="rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle">
-                            Edit
+                            Editar
                           </button>
                           <button type="button" onClick={() => setConfirmRevoke(t.id)} className="rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle">
-                            Revoke
+                            Revocar
                           </button>
                         </div>
                       )
@@ -252,7 +252,7 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
                   {/* Capability chips */}
                   <div className="flex flex-wrap gap-1">
                     {t.capabilities.length === 0 ? (
-                      <span className="rounded-full bg-subtle px-2 py-0.5 text-[11px] text-faint">no capabilities</span>
+                      <span className="rounded-full bg-subtle px-2 py-0.5 text-[11px] text-faint">sin funciones</span>
                     ) : (
                       t.capabilities.map((c) => (
                         <span key={c} className="rounded-full bg-subtle px-2 py-0.5 text-[11px] font-medium text-muted" title={LABEL.get(c) ?? c}>
@@ -265,14 +265,14 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
                   {/* Inline capability editor */}
                   {editingToken === t.id ? (
                     <div className="flex flex-col gap-3 rounded-lg border border-line bg-subtle/40 p-3">
-                      <p className="text-xs font-medium uppercase tracking-wider text-faint">Edit capabilities</p>
+                      <p className="text-xs font-medium uppercase tracking-wider text-faint">Editar funciones</p>
                       <CapabilityPicker selected={editCaps} onToggle={(k) => toggle(editCaps, setEditCaps, k)} />
                       <div className="flex items-center gap-2">
                         <button type="button" disabled={busyId === `edit:${t.id}` || editCaps.size === 0} onClick={() => saveEdit(t.id)} className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
-                          {busyId === `edit:${t.id}` ? "Saving…" : "Save"}
+                          {busyId === `edit:${t.id}` ? "Guardando…" : "Guardar"}
                         </button>
                         <button type="button" onClick={() => setEditingToken(null)} className="text-xs text-faint hover:text-foreground">
-                          Cancel
+                          Cancelar
                         </button>
                       </div>
                     </div>
@@ -281,7 +281,7 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
               ))}
             </ul>
           ) : (
-            <p className="text-xs text-faint">No tokens yet for this connection.</p>
+            <p className="text-xs text-faint">Todavía no hay tokens para esta conexión.</p>
           )}
         </div>
       ))}
@@ -289,18 +289,18 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
       {newToken ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true">
           <div className="w-full max-w-lg rounded-2xl border border-black/10 bg-white p-5 shadow-xl dark:border-line-strong dark:bg-neutral-900">
-            <h3 className="text-base font-semibold">Copy your token now</h3>
+            <h3 className="text-base font-semibold">Copia tu token ahora</h3>
             <p className="mt-1 text-sm text-neutral-500">
-              This is the only time the full token is shown. Store it somewhere safe — you won&rsquo;t be able to see it
-              again. If you lose it, revoke it and issue a new one.
+              Es la única vez que se muestra el token completo. Guárdalo en un lugar seguro: no podrás volver a
+              verlo. Si lo pierdes, revócalo y emite uno nuevo.
             </p>
             <div className="mt-4 break-all rounded-lg border border-line bg-subtle px-3 py-2 font-mono text-sm">{newToken}</div>
             <div className="mt-4 flex items-center justify-end gap-2">
               <button type="button" onClick={copyToken} className="rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle">
-                {copied ? "Copied ✓" : "Copy"}
+                {copied ? "Copiado ✓" : "Copiar"}
               </button>
               <button type="button" onClick={() => { setNewToken(null); setCopied(false); }} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white transition-colors hover:opacity-90">
-                Done
+                Listo
               </button>
             </div>
           </div>

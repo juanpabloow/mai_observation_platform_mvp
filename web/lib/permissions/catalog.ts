@@ -70,7 +70,7 @@ export const PERMISSION_AREAS: ReadonlyArray<{ id: PermissionArea; label: string
   { id: "results", label: "Dashboard de valor y analíticas", help: "Resultados del negocio." },
   { id: "settings", label: "Configuración", help: "Sedes y reglas de reserva." },
   { id: "access", label: "Usuarios y accesos", help: "Quién entra a M_AI y con qué rol." },
-  { id: "automations", label: "Automatizaciones", help: "Workflows y ejecuciones del negocio." },
+  { id: "automations", label: "Automatizaciones", help: "Flujos y ejecuciones del negocio." },
   { id: "meetings", label: "Reuniones", help: "Grabaciones y análisis de reuniones." },
 ];
 
@@ -125,7 +125,7 @@ export const PERMISSIONS = [
   { key: "access.users.manage", area: "access", module: null, requires: ["access.users.view"], sensitive: true, label: "Gestionar usuarios", help: "Invitar, cambiar el rol y quitar el acceso, solo con roles que no superen los suyos." },
   { key: "access.roles.manage", area: "access", module: null, requires: ["access.users.view"], sensitive: true, label: "Gestionar roles", help: "Crear, editar y eliminar roles personalizados, solo con permisos que la persona ya tiene." },
   // ── Automatizaciones ───────────────────────────────────────────────────────────
-  { key: "automations.view", area: "automations", module: null, requires: [], label: "Ver workflows", help: "Ver los workflows del negocio y sus ejecuciones." },
+  { key: "automations.view", area: "automations", module: null, requires: [], label: "Ver flujos", help: "Ver los flujos del negocio y sus ejecuciones." },
   // ── Reuniones ──────────────────────────────────────────────────────────────────
   { key: "meetings.view", area: "meetings", module: "meetings", requires: [], label: "Usar Reuniones", help: "Ver, subir y analizar reuniones y descargar sus informes." },
   { key: "meetings.manage", area: "meetings", module: "meetings", requires: ["meetings.view"], sensitive: true, businessGrantable: false, label: "Administrar Reuniones", help: "Eliminar reuniones y editar plantillas de informe. Solo la agencia." },

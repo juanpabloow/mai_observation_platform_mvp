@@ -53,7 +53,7 @@ test('the permission comes from the server, per page', () => {
 
 test('no controls for a frame that cannot fill', () => {
   const occ = read('components/scheduling/OccupancyPanel.tsx');
-  assert.ok(occ.includes('{noSites ? null : ('), 'Ocupación hides Día/Semana/Mes and ‹ › without a site');
+  assert.ok(occ.includes('const controls = noSites ? null : (') && occ.includes('actions={controls}'), 'Ocupación hides Día/Semana/Mes and ‹ › without a site');
   const bp = read('components/scheduling/settings/BookingPageScreen.tsx');
   assert.match(bp, /\{preview \? \(\s*<button[\s\S]*?Ocultar vista previa/, 'no preview toggle without a preview');
 });

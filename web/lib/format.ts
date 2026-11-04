@@ -1,7 +1,8 @@
 /** Shared, framework-agnostic display formatters (safe in server or client). */
 
+/** Operator-facing date + time (the executions table and detail), in Colombian Spanish. */
 export function formatDateTime(date: Date): string {
-  return date.toLocaleString("en-US", {
+  return date.toLocaleString("es-CO", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -14,8 +15,7 @@ export function formatDateTime(date: Date): string {
  * A date + time the way Scheduling writes them: Spanish, 24-hour, in the given timezone
  * ("9 oct 2026, 15:30"). Pass the SITE's timezone when the moment belongs to a place (an
  * appointment); without one it falls back to the viewer's own zone — never a hard-coded
- * city. `formatDateTime` above stays as it is for the English, operator-facing screens
- * (executions) that still use it.
+ * city. `formatDateTime` above is the separate operator-facing stamp the executions screens use.
  */
 export function formatLocalDateTime(date: Date | string, timeZone?: string): string {
   const d = typeof date === "string" ? new Date(date) : date;
@@ -166,6 +166,24 @@ export function formatStampFull(date: Date): string {
 // machine API (price_label) and the agenda, so a price never reads two ways. The former
 // formatMoneyCOP here was a second implementation that rounded cents away ("$2.501" vs
 // "$2.500,50"); it was removed in favour of the cents-preserving canonical helper.
+
+/**
+ * What an execution status is CALLED on screen. Display only: the raw n8n status keeps
+ * driving styling (statusBadgeClasses), sorting and the `status` filter param. An unknown
+ * status falls back to its raw value rather than disappearing.
+ */
+const EXECUTION_STATUS_LABELS: Record<string, string> = {
+  success: "Correcta",
+  error: "Error",
+  running: "En curso",
+  waiting: "En espera",
+  canceled: "Cancelada",
+  crashed: "Fallida",
+};
+
+export function executionStatusLabel(status: string): string {
+  return EXECUTION_STATUS_LABELS[status] ?? status;
+}
 
 /** Tailwind classes for a status badge (green success / red error / neutral). */
 export function statusBadgeClasses(status: string): string {

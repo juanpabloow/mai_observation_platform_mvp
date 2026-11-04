@@ -15,13 +15,13 @@ export interface FilterableField {
 type CustomOperator = "equals" | "contains" | "not_empty";
 
 const STATUS_OPTIONS = [
-  { value: "success", label: "Success" },
+  { value: "success", label: "Correcta" },
   { value: "error", label: "Error" },
 ];
 const OPERATORS: { value: CustomOperator; label: string }[] = [
-  { value: "equals", label: "equals" },
-  { value: "contains", label: "contains" },
-  { value: "not_empty", label: "is not empty" },
+  { value: "equals", label: "es igual a" },
+  { value: "contains", label: "contiene" },
+  { value: "not_empty", label: "no está vacío" },
 ];
 
 const inputClass =
@@ -120,7 +120,7 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
         className="inline-flex items-center gap-1.5 rounded-lg border border-black/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
         aria-expanded={open}
       >
-        <span aria-hidden>＋</span> Filter
+        <span aria-hidden>＋</span> Filtrar
       </button>
 
       {open && typeof document !== "undefined"
@@ -138,8 +138,8 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
         >
           {picked === null ? (
             <div className="flex flex-col py-1">
-              <GroupLabel>Predefined</GroupLabel>
-              <FieldButton onClick={() => setPicked("status")}>Status</FieldButton>
+              <GroupLabel>Predefinidos</GroupLabel>
+              <FieldButton onClick={() => setPicked("status")}>Estado</FieldButton>
               <FieldButton
                 onClick={() => {
                   setFrom(searchParams.get("from") ?? "");
@@ -147,13 +147,13 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
                   setPicked("date");
                 }}
               >
-                Date range
+                Rango de fechas
               </FieldButton>
 
-              <GroupLabel>Node outputs</GroupLabel>
+              <GroupLabel>Salidas de nodos</GroupLabel>
               {customFields.length === 0 ? (
                 <p className="px-3 py-2 text-xs text-neutral-500">
-                  No custom columns — add one to filter by it.
+                  No hay columnas personalizadas: agrega una para filtrar por ella.
                 </p>
               ) : (
                 customFields.map((f) => (
@@ -164,7 +164,7 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
               )}
             </div>
           ) : picked === "status" ? (
-            <Editor title="Status" onBack={() => setPicked(null)}>
+            <Editor title="Estado" onBack={() => setPicked(null)}>
               <div className="flex flex-wrap gap-2">
                 {STATUS_OPTIONS.map((opt) => (
                   <button
@@ -179,13 +179,13 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
               </div>
             </Editor>
           ) : picked === "date" ? (
-            <Editor title="Date range" onBack={() => setPicked(null)}>
+            <Editor title="Rango de fechas" onBack={() => setPicked(null)}>
               <label className="flex flex-col gap-1 text-xs text-neutral-500">
-                From
+                Desde
                 <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={inputClass} />
               </label>
               <label className="flex flex-col gap-1 text-xs text-neutral-500">
-                To
+                Hasta
                 <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={inputClass} />
               </label>
               <ApplyButton
@@ -201,7 +201,7 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
           ) : (
             <Editor title={picked.label} onBack={() => setPicked(null)}>
               <label className="flex flex-col gap-1 text-xs text-neutral-500">
-                Condition
+                Condición
                 <select
                   value={operator}
                   onChange={(e) => setOperator(e.target.value as CustomOperator)}
@@ -214,12 +214,12 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
               </label>
               {operator !== "not_empty" ? (
                 <label className="flex flex-col gap-1 text-xs text-neutral-500">
-                  Value
+                  Valor
                   <input
                     autoFocus
                     value={value}
                     onChange={(e) => setValue(e.target.value)}
-                    placeholder="value…"
+                    placeholder="valor…"
                     className={inputClass}
                   />
                 </label>
@@ -267,7 +267,7 @@ function Editor({ title, onBack, children }: { title: string; onBack: () => void
         onClick={onBack}
         className="flex items-center gap-1 text-xs text-neutral-500 transition-colors hover:text-foreground"
       >
-        <span aria-hidden>‹</span> Back
+        <span aria-hidden>‹</span> Atrás
       </button>
       <p className="truncate text-sm font-medium">{title}</p>
       {children}
@@ -283,7 +283,7 @@ function ApplyButton({ onClick, disabled }: { onClick: () => void; disabled?: bo
       disabled={disabled}
       className="self-start rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
     >
-      Apply filter
+      Aplicar filtro
     </button>
   );
 }

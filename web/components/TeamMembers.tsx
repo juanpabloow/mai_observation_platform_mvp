@@ -80,10 +80,17 @@ const ROLE_BADGE: Record<MemberRole, string> = {
 };
 
 const CLIENT_ROLE_LABEL: Record<ClientRole, string> = {
-  owner: "Owner",
-  setter: "Setter",
-  staff: "Staff",
-  custom: "Custom",
+  owner: "Dueño",
+  setter: "Recepción",
+  staff: "Profesional",
+  custom: "Personalizado",
+};
+
+/** Display names for the tenant-level role badge (the raw role keeps driving logic + styling). */
+const MEMBER_ROLE_LABEL: Record<MemberRole, string> = {
+  owner: "Dueño",
+  admin: "Administrador",
+  member: "Miembro",
 };
 
 export function TeamMembers({
@@ -146,10 +153,10 @@ function MemberRow({
         setDemoting(false);
         router.refresh();
       } else {
-        setError(res.error ?? "Something went wrong.");
+        setError(res.error ?? "Algo salió mal.");
       }
     } catch {
-      setError("Something went wrong.");
+      setError("Algo salió mal.");
     } finally {
       setBusy(false);
     }
@@ -160,9 +167,9 @@ function MemberRow({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate font-medium">{member.email}</span>
-          {member.isYou ? <span className="text-xs text-faint">(you)</span> : null}
-          <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs capitalize ${ROLE_BADGE[member.role]}`}>
-            {member.role}
+          {member.isYou ? <span className="text-xs text-faint">(tú)</span> : null}
+          <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${ROLE_BADGE[member.role]}`}>
+            {MEMBER_ROLE_LABEL[member.role]}
           </span>
           {member.role === "member" ? (
             <span className="truncate text-xs text-muted">
@@ -181,7 +188,7 @@ function MemberRow({
             {/* MEMBER: reassign client (agency only) */}
             {member.role === "member" && viewer.agency && clients.length > 0 ? (
               <label className="flex items-center gap-1.5 text-xs text-muted">
-                <span className="sr-only">Client</span>
+                <span className="sr-only">Negocio</span>
                 <select
                   value={member.clientId ?? ""}
                   disabled={busy}
@@ -211,7 +218,7 @@ function MemberRow({
                 }
                 className="rounded-md border border-line px-2 py-1 text-xs transition-colors hover:bg-subtle disabled:opacity-50"
               >
-                Make admin
+                Hacer administrador
               </button>
             ) : null}
 
@@ -244,14 +251,14 @@ function MemberRow({
                     }
                     className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
                   >
-                    Confirm
+                    Confirmar
                   </button>
                   <button
                     type="button"
                     onClick={() => setDemoting(false)}
                     className="rounded-md px-2 py-1 text-xs text-muted hover:text-foreground"
                   >
-                    Cancel
+                    Cancelar
                   </button>
                 </span>
               ) : (
@@ -261,7 +268,7 @@ function MemberRow({
                   onClick={() => setDemoting(true)}
                   className="rounded-md border border-line px-2 py-1 text-xs transition-colors hover:bg-subtle disabled:opacity-50"
                 >
-                  Make member
+                  Hacer miembro
                 </button>
               )
             ) : null}
@@ -275,14 +282,14 @@ function MemberRow({
                   onClick={() => run(() => removeMemberAction({ targetUserId: member.userId }))}
                   className="rounded-md bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50"
                 >
-                  Remove
+                  Quitar
                 </button>
                 <button
                   type="button"
                   onClick={() => setConfirmRemove(false)}
                   className="rounded-md px-2 py-1 text-xs text-muted hover:text-foreground"
                 >
-                  Cancel
+                  Cancelar
                 </button>
               </span>
             ) : (
@@ -292,7 +299,7 @@ function MemberRow({
                 onClick={() => setConfirmRemove(true)}
                 className="rounded-md px-2 py-1 text-xs text-danger transition-colors hover:bg-red-500/10 disabled:opacity-50"
               >
-                Remove
+                Quitar
               </button>
             )}
           </div>
@@ -305,22 +312,22 @@ function MemberRow({
       {manageable && member.role === "member" && member.clientId && viewer.canManageMembers ? (
         <div className="flex flex-wrap items-end gap-2 rounded-lg bg-subtle px-3 py-2">
           <label className="flex flex-col gap-1 text-xs text-muted">
-            Role
+            Rol
             <select
               value={clientRole}
               disabled={busy}
               onChange={(event) => setClientRole(event.target.value as ClientRole)}
               className="rounded-md border border-line bg-card px-2 py-1.5 text-foreground"
             >
-              {viewer.canAssignOwner ? <option value="owner">Owner</option> : null}
-              <option value="setter">Setter</option>
-              <option value="staff">Staff</option>
+              {viewer.canAssignOwner ? <option value="owner">Dueño</option> : null}
+              <option value="setter">Recepción</option>
+              <option value="staff">Profesional</option>
             </select>
           </label>
           {clientRole === "staff" ? (
             <>
               <label className="flex flex-col gap-1 text-xs text-muted">
-                Site
+                Sede
                 <select
                   value={siteId}
                   disabled={busy}
@@ -335,7 +342,7 @@ function MemberRow({
                 </select>
               </label>
               <label className="flex flex-col gap-1 text-xs text-muted">
-                Staff profile
+                Perfil de profesional
                 <select
                   value={staffId}
                   disabled={busy}
@@ -367,7 +374,7 @@ function MemberRow({
             }
             className="rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-50"
           >
-            Save role
+            Guardar rol
           </button>
         </div>
       ) : null}

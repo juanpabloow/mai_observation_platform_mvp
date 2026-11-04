@@ -185,7 +185,7 @@ export function buildSections(ctx: NavContext): NavSection[] {
     automations: [
       // Workflows = the scope's executions (the production rail item, list + per-workflow
       // pages); there is no separate all-workflows execution screen to duplicate it with.
-      p("automations.view") && { id: "workflows", label: "Workflows", href: wf.executions },
+      p("automations.view") && { id: "workflows", label: "Flujos", href: wf.executions },
       // What this business's bots spend in AI (same gate as the value dashboard).
       p("analytics.view") && !isDefault && { id: "ai-costs", label: "Costos de IA", href: c("/costos-ia") },
       p("meetings.view") && has("meetings") && { id: "meetings", label: "Reuniones", href: c("/reuniones") },

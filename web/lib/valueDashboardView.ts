@@ -479,14 +479,14 @@ export function evidenceCopy(data: ValueDashboardData): { title: string; text: s
   if (r === "no_conversational")
     return {
       title: "Sin automatizaciones conversacionales",
-      text: "Ningún workflow de este negocio registra conversaciones en la plataforma, así que no hay atención que medir.",
-      agencyHint: "Si un workflow atiende clientes, configura sus mapeos de conversación o haz que reporte sus mensajes.",
+      text: "Ningún flujo de este negocio registra conversaciones en la plataforma, así que no hay atención que medir.",
+      agencyHint: "Si un flujo atiende clientes, configura sus mapeos de conversación o haz que reporte sus mensajes.",
     };
   if (r === "contrast_insufficient")
     return {
       title: "Sin evidencia suficiente",
       text: "Todavía no podemos confirmar que el registro de mensajes esté completo. No mostramos cifras de conversaciones ni tiempos de respuesta, ni siquiera ceros, hasta tener evidencia.",
-      agencyHint: "El contraste automático entre ejecuciones y mensajes no alcanza el mínimo. Revisa el motivo de cada workflow.",
+      agencyHint: "El contraste automático entre ejecuciones y mensajes no alcanza el mínimo. Revisa el motivo de cada flujo.",
     };
   if (r === "no_review")
     return {
@@ -498,12 +498,12 @@ export function evidenceCopy(data: ValueDashboardData): { title: string; text: s
     return {
       title: "Sin evidencia suficiente",
       text: "La última revisión manual del registro de mensajes no se aprobó. No mostramos cifras de conversaciones hasta corregirlo.",
-      agencyHint: "Corrige el workflow y registra una nueva revisión.",
+      agencyHint: "Corrige el flujo y registra una nueva revisión.",
     };
   return {
     title: "Sin evidencia suficiente",
-    text: "La revisión manual del registro de mensajes no cubre todos los workflows conversacionales actuales. No mostramos cifras de conversaciones hasta revisarlos.",
-    agencyHint: "Registra una revisión que incluya los workflows nuevos.",
+    text: "La revisión manual del registro de mensajes no cubre todos los flujos conversacionales actuales. No mostramos cifras de conversaciones hasta revisarlos.",
+    agencyHint: "Registra una revisión que incluya los flujos nuevos.",
   };
 }
 

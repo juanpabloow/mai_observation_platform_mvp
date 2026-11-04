@@ -27,7 +27,7 @@ export function QualityDialog({ data, onClose }: { data: ValueDashboardData; onC
             <h2 id="vd-q" style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
               Estado de los datos
             </h2>
-            <span className={s.note}>{agency ? "Vista agencia · detalle por workflow" : "Vista dueño"}</span>
+            <span className={s.note}>{agency ? "Vista agencia · detalle por flujo" : "Vista dueño"}</span>
           </div>
           <button type="button" aria-label="Cerrar estado de los datos" onClick={onClose} className={buttonClass({ variant: "tertiary", className: "!w-[44px] !px-0" })}>
             <CloseIcon />
@@ -53,7 +53,7 @@ export function QualityDialog({ data, onClose }: { data: ValueDashboardData; onC
                 {ev.params.tolerancia.replace("minutes", "min")}, umbral {fmtPct(ev.params.umbral)}, mínimo {ev.params.minimo} turnos (metodología {ev.params.methodVersion}). Son
                 un punto de partida, no una certificación.
               </span>
-              <div role="table" aria-label="Evidencia por workflow" style={{ display: "flex", flexDirection: "column" }}>
+              <div role="table" aria-label="Evidencia por flujo" style={{ display: "flex", flexDirection: "column" }}>
                 <div role="row" className={cx(s.qRow, s.qRowAgency)} style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.04em", color: "var(--vd-tertiary)" }}>
                   <span role="columnheader">WORKFLOW</span>
                   <span role="columnheader">FUENTE</span>
@@ -102,7 +102,7 @@ export function QualityDialog({ data, onClose }: { data: ValueDashboardData; onC
                   <span role="cell" className={s.secondary} style={{ lineHeight: 1.45 }}>
                     {!ev.review
                       ? "No hay una revisión manual registrada para este negocio. Sin ella las métricas conversacionales siguen ocultas aunque el contraste sea suficiente."
-                      : `Revisión del ${fmtDay(ev.review.reviewedAt.slice(0, 10), true)} (metodología ${ev.review.methodVersion}).${ev.review.coversAll ? "" : " No cubre todos los workflows conversacionales actuales o usa otra metodología."}`}
+                      : `Revisión del ${fmtDay(ev.review.reviewedAt.slice(0, 10), true)} (metodología ${ev.review.methodVersion}).${ev.review.coversAll ? "" : " No cubre todos los flujos conversacionales actuales o usa otra metodología."}`}
                   </span>
                 </div>
               </div>

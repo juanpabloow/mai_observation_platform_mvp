@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { PageShell } from "@/components/ui/PageShell";
+import { ModuleSurface, SurfaceHeader } from "@/components/ui/module/ModuleSurface";
+import { Alert, Button, INPUT } from "@/components/ui/controls";
 import {
   addPaymentMethodAction,
   renamePaymentMethodAction,
@@ -24,18 +25,18 @@ interface Method {
   active: boolean;
 }
 
-const BTN = "inline-flex h-[34px] items-center justify-center rounded-lg bg-foreground px-3 text-xs font-medium text-background transition hover:opacity-90 disabled:opacity-50";
-const GHOST = "inline-flex h-[30px] items-center justify-center rounded-lg border border-line px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground disabled:opacity-40";
-const INPUT = "h-[34px] rounded-lg border border-line-strong bg-surface px-2.5 text-sm text-foreground outline-none transition focus:border-foreground";
+// Shared controls (components/ui/controls): 44px on phones and tablets, the desktop
+// density from lg — they were a private 30px/34px set, smaller than every other screen.
+const MOVE = "u-focus u-tap inline-flex size-[44px] shrink-0 items-center justify-center rounded-sch-control border border-line-strong bg-surface text-muted transition-colors hover:bg-subtle hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 lg:size-[36px]";
 
 export function PaymentMethodsPanel({
   clientId,
-  clientName,
   methods,
   trackingStartedAt,
 }: {
   clientId: string;
-  clientName: string;
+  /** Kept for callers; the breadcrumb names the business, so the title no longer does. */
+  clientName?: string;
   methods: Method[];
   trackingStartedAt: string | null;
 }) {
@@ -64,41 +65,30 @@ export function PaymentMethodsPanel({
   };
 
   return (
-    <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
-      <PageShell grow={false} clip={false}>
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-2.5">
-              <h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-foreground">Métodos de pago</h1>
-              <span className="truncate text-xs text-muted">{clientName}</span>
-            </div>
-            <p className="mt-0.5 hidden text-xs text-muted sm:block">
-              Cómo cobra el negocio al completar una cita. Un método en uso se desactiva, nunca se borra.
-            </p>
-          </div>
-        </div>
-      </PageShell>
+    // The approved settings surface (auditoría UI 2026-11-03, F07): ONE surface with the shared
+    // title band, like Reglas or Sedes — not a header card over two more cards. The business is
+    // named by the breadcrumb (and the rail with the bar hidden), so the title no longer repeats it.
+    <ModuleSurface label="Métodos de pago">
+      <SurfaceHeader title="Métodos de pago" summary="Cómo cobra el negocio al completar una cita. Un método en uso se desactiva, nunca se borra." />
+      <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto px-4 pb-8 pt-2 md:px-[20px]">
+        {error ? <Alert>{error}</Alert> : null}
 
-      {error ? (
-        <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
-        </p>
-      ) : null}
-
-      <PageShell grow={false} clip={false}>
-        <div className="flex flex-col gap-2 p-3 sm:p-4">
-          <ul className="flex flex-col gap-2">
+        <section aria-labelledby="pm-methods" className="flex max-w-3xl flex-col gap-3">
+          <h2 id="pm-methods" className="text-[0.9375rem] font-semibold text-foreground">Métodos</h2>
+          <ul className="flex flex-col divide-y divide-line-soft border-y border-line-soft">
             {methods.map((m, i) => (
-              <li key={m.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
-                <div className="flex flex-col gap-0.5">
-                  <span className="flex gap-1">
-                    <button type="button" aria-label="Subir" className={GHOST} disabled={pending || i === 0} onClick={() => move(i, -1)}>↑</button>
-                    <button type="button" aria-label="Bajar" className={GHOST} disabled={pending || i === methods.length - 1} onClick={() => move(i, 1)}>↓</button>
-                  </span>
-                </div>
+              <li key={m.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
+                <span className="flex shrink-0 gap-1.5">
+                  <button type="button" aria-label={`Subir ${m.label}`} className={MOVE} disabled={pending || i === 0} onClick={() => move(i, -1)}>
+                    <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7" /></svg>
+                  </button>
+                  <button type="button" aria-label={`Bajar ${m.label}`} className={MOVE} disabled={pending || i === methods.length - 1} onClick={() => move(i, 1)}>
+                    <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 3.5v9M4.5 9 8 12.5 11.5 9" /></svg>
+                  </button>
+                </span>
                 {editing?.id === m.id ? (
                   <form
-                    className="flex min-w-0 flex-1 items-center gap-2"
+                    className="flex min-w-[min(100%,16rem)] flex-1 flex-wrap items-center gap-2"
                     onSubmit={(e) => {
                       e.preventDefault();
                       const label = editing.label;
@@ -109,25 +99,25 @@ export function PaymentMethodsPanel({
                       });
                     }}
                   >
-                    <input autoFocus value={editing.label} maxLength={80} onChange={(e) => setEditing({ id: m.id, label: e.target.value })} className={`${INPUT} min-w-0 flex-1`} aria-label="Nombre del método" />
-                    <button type="submit" className={BTN} disabled={pending || editing.label.trim() === ""}>Guardar</button>
-                    <button type="button" className={GHOST} disabled={pending} onClick={() => setEditing(null)}>Cancelar</button>
+                    <input autoFocus value={editing.label} maxLength={80} onChange={(e) => setEditing({ id: m.id, label: e.target.value })} className={`${INPUT} min-w-[10rem] flex-1`} aria-label="Nombre del método" />
+                    <Button type="submit" variant="primary" size="sm" disabled={pending || editing.label.trim() === ""}>Guardar</Button>
+                    <Button size="sm" disabled={pending} onClick={() => setEditing(null)}>Cancelar</Button>
                   </form>
                 ) : (
                   <>
-                    <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                    {/* The whole name, wrapped: at 390px it was cut to «Davipl…». */}
+                    <span className="min-w-[8rem] flex-1 break-words text-sm text-foreground">
                       {m.label}
-                      {!m.active ? <span className="ml-2 rounded-full bg-chip px-2 py-0.5 text-[0.625rem] text-faint">Inactivo</span> : null}
+                      {!m.active ? <span className="ml-2 rounded-full bg-chip px-2 py-0.5 text-[0.6875rem] text-muted">Inactivo</span> : null}
                     </span>
-                    <button type="button" className={GHOST} disabled={pending} onClick={() => setEditing({ id: m.id, label: m.label })}>Renombrar</button>
-                    <button
-                      type="button"
-                      className={GHOST}
-                      disabled={pending}
-                      onClick={() => run(() => setPaymentMethodActiveAction(clientId, m.id, !m.active))}
-                    >
-                      {m.active ? "Desactivar" : "Activar"}
-                    </button>
+                    <span className="flex shrink-0 gap-2 max-sm:w-full max-sm:justify-end">
+                      <Button size="sm" disabled={pending} onClick={() => setEditing({ id: m.id, label: m.label })} aria-label={`Renombrar ${m.label}`}>
+                        Renombrar
+                      </Button>
+                      <Button size="sm" disabled={pending} onClick={() => run(() => setPaymentMethodActiveAction(clientId, m.id, !m.active))} aria-label={`${m.active ? "Desactivar" : "Activar"} ${m.label}`}>
+                        {m.active ? "Desactivar" : "Activar"}
+                      </Button>
+                    </span>
                   </>
                 )}
               </li>
@@ -135,7 +125,7 @@ export function PaymentMethodsPanel({
           </ul>
 
           <form
-            className="mt-1 flex items-center gap-2"
+            className="flex flex-wrap items-center gap-2"
             onSubmit={(e) => {
               e.preventDefault();
               const label = newLabel;
@@ -146,31 +136,31 @@ export function PaymentMethodsPanel({
               });
             }}
           >
-            <input value={newLabel} maxLength={80} placeholder="Nuevo método (p. ej. PSE)" onChange={(e) => setNewLabel(e.target.value)} className={`${INPUT} min-w-0 flex-1`} aria-label="Nuevo método de pago" />
-            <button type="submit" className={BTN} disabled={pending || newLabel.trim() === ""}>Agregar</button>
+            <input value={newLabel} maxLength={80} placeholder="Nuevo método (p. ej. PSE)" onChange={(e) => setNewLabel(e.target.value)} className={`${INPUT} min-w-[12rem] flex-1`} aria-label="Nuevo método de pago" />
+            <Button type="submit" variant="primary" size="sm" disabled={pending || newLabel.trim() === ""}>Agregar</Button>
           </form>
-        </div>
-      </PageShell>
+        </section>
 
-      <PageShell grow={false} clip={false}>
-        <div className="flex flex-col gap-2 p-3 sm:p-4">
-          <h2 className="text-sm font-semibold text-foreground">Desde cuándo se cobra</h2>
-          <p className="text-xs text-muted">
-            Las citas completadas en esta fecha o después, sin cobro registrado, aparecen como “cobro pendiente”.
-          </p>
+        <section aria-labelledby="pm-since" className="flex max-w-3xl flex-col gap-3">
+          <div>
+            <h2 id="pm-since" className="text-[0.9375rem] font-semibold text-foreground">Desde cuándo se cobra</h2>
+            <p className="mt-1 text-[0.8125rem] text-muted">
+              Las citas completadas en esta fecha o después, sin cobro registrado, aparecen como “cobro pendiente”.
+            </p>
+          </div>
           <form
-            className="flex items-center gap-2"
+            className="flex flex-wrap items-center gap-2"
             onSubmit={(e) => {
               e.preventDefault();
               if (!date) return;
               run(() => setPaymentsTrackingStartedAtAction(clientId, `${date}T00:00:00.000Z`));
             }}
           >
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={INPUT} aria-label="Fecha de inicio de cobros" />
-            <button type="submit" className={BTN} disabled={pending || !date}>Guardar fecha</button>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={`${INPUT} max-w-[14rem]`} aria-label="Fecha de inicio de cobros" />
+            <Button type="submit" variant="primary" size="sm" disabled={pending || !date}>Guardar fecha</Button>
           </form>
-        </div>
-      </PageShell>
-    </main>
+        </section>
+      </div>
+    </ModuleSurface>
   );
 }

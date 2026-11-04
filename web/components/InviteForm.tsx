@@ -23,9 +23,9 @@ type InviteFormProps =
 type ClientRole = "owner" | "setter" | "staff";
 
 const ROLE_HINT: Record<ClientRole, string> = {
-  owner: "Owner — full control of this business (people, settings, everything).",
-  setter: "Setter — chats, contacts and agenda.",
-  staff: "Staff — their own agenda only. No contacts or inbox.",
+  owner: "Dueño — control total de este negocio (personas, configuración, todo).",
+  setter: "Recepción — chats, contactos y agenda.",
+  staff: "Profesional — solo su propia agenda. Sin contactos ni bandeja.",
 };
 
 /**
@@ -73,7 +73,7 @@ export function InviteForm(props: InviteFormProps) {
       setResult(res);
       if (res.ok) setEmail("");
     } catch {
-      setResult({ ok: false, error: "Something went wrong creating the invitation." });
+      setResult({ ok: false, error: "Algo salió mal al crear la invitación." });
     } finally {
       setBusy(false);
     }
@@ -81,39 +81,39 @@ export function InviteForm(props: InviteFormProps) {
 
   const hint =
     props.mode === "admin"
-      ? "They'll have full access to the workspace."
+      ? "Tendrá acceso completo a la plataforma."
       : ROLE_HINT[role];
 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-3 rounded-2xl border border-line bg-card p-5">
       <label className="flex flex-col gap-1 text-sm">
-        <span className="text-muted">Email</span>
+        <span className="text-muted">Correo</span>
         <input
           type="email"
           required
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          placeholder="teammate@example.com"
+          placeholder="companero@ejemplo.com"
           className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none transition-colors focus:border-line-strong"
         />
       </label>
       {props.mode === "member" ? (
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-muted">Role</span>
+            <span className="text-muted">Rol</span>
             <select
               value={role}
               onChange={(event) => setRole(event.target.value as ClientRole)}
               className="rounded-lg border border-line bg-card px-3 py-2 outline-none focus:border-line-strong"
             >
-              {canInviteOwner ? <option value="owner">Owner</option> : null}
-              <option value="setter">Setter</option>
-              <option value="staff">Staff</option>
+              {canInviteOwner ? <option value="owner">Dueño</option> : null}
+              <option value="setter">Recepción</option>
+              <option value="staff">Profesional</option>
             </select>
           </label>
           {role === "staff" ? (
             <label className="flex flex-col gap-1 text-sm">
-              <span className="text-muted">Site</span>
+              <span className="text-muted">Sede</span>
               <select
                 required
                 value={siteId}
@@ -130,7 +130,7 @@ export function InviteForm(props: InviteFormProps) {
           ) : null}
           {role === "staff" ? (
             <label className="flex flex-col gap-1 text-sm sm:col-span-2">
-              <span className="text-muted">Staff profile</span>
+              <span className="text-muted">Perfil de profesional</span>
               <select
                 required
                 value={staffId}
@@ -154,7 +154,7 @@ export function InviteForm(props: InviteFormProps) {
         disabled={busy || (props.mode === "member" && role === "staff" && (!siteId || !staffId))}
         className="self-start rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
       >
-        {busy ? "Sending…" : props.mode === "admin" ? "Send admin invitation" : "Send invitation"}
+        {busy ? "Enviando…" : props.mode === "admin" ? "Enviar invitación de administrador" : "Enviar invitación"}
       </button>
 
       {result ? (
@@ -169,7 +169,7 @@ export function InviteForm(props: InviteFormProps) {
         >
           {result.ok ? (
             <div className="space-y-1">
-              <p>{result.emailSent ? "Invitation sent." : result.error}</p>
+              <p>{result.emailSent ? "Invitación enviada." : result.error}</p>
               {result.acceptUrl ? (
                 <p className="break-all font-mono text-xs text-muted">{result.acceptUrl}</p>
               ) : null}

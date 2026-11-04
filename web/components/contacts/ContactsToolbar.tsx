@@ -97,7 +97,7 @@ export function ContactsSearch({ compact = false }: { compact?: boolean } = {}) 
       // Below md the field shares its row with Filtrar and `···` (ModuleHeader's phone
       // layout): its floor drops to 8rem — still never just an icon — and it is a 44px
       // touch target. From md the 15rem floor holds.
-      className={`${MODULE_SEARCH_CLS} min-w-[8rem] flex-1 max-lg:h-[44px] md:min-w-[15rem] ${compact ? "max-w-[240px]" : ""}`}
+      className={`${MODULE_SEARCH_CLS} min-w-[8rem] flex-1 max-lg:h-[44px] md:min-w-[min(15rem,100%)] ${compact ? "max-w-[240px]" : ""}`}
     >
       <SearchIcon />
       <input
@@ -116,7 +116,7 @@ export function ContactsSearch({ compact = false }: { compact?: boolean } = {}) 
             setDraft("");
             apply({ q: "" });
           }}
-          aria-label="Limpiar búsqueda"
+          aria-label="Borrar búsqueda"
           className="u-tap shrink-0 rounded text-faint transition-colors hover:text-foreground"
         >
           ✕
