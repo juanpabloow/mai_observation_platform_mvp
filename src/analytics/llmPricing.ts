@@ -5,8 +5,12 @@
  * identifiers, no prefix matching, and an unknown model costs `null` («sin precio»), never 0.
  * A dated id that bills at its alias's rate goes in MODEL_ALIAS explicitly.
  *
- * `verified: false` = taken from secondary sources on `checkedAt`, not yet read off
- * https://developers.openai.com/api/docs/pricing. The screen shows this table as is.
+ * Source: https://developers.openai.com/api/docs/pricing («Prices per 1M tokens», US$), Standard
+ * tier, SHORT context (≤272K input tokens per request). Cross-checked against each model's page
+ * (developers.openai.com/api/docs/models/<id>), which lists the bare id as its only snapshot.
+ * Not applied: long context (>272K input: 2× input, 1.5× output for the whole request), Batch/Flex
+ * (½), Fast (2×), and the 10% regional-processing uplift. A WhatsApp turn stays far below 272K.
+ * `verified: true` = read off those pages on `checkedAt`; the page publishes no effective date.
  */
 export interface ModelPrice {
   inPerM: number;
@@ -17,17 +21,25 @@ export interface ModelPrice {
 }
 
 export const LLM_PRICES: Readonly<Record<string, ModelPrice>> = {
-  'gpt-5.6-terra': { inPerM: 2.0, cachedInPerM: 0.2, outPerM: 12.0, checkedAt: '2026-11-03', verified: false },
-  'gpt-5.4-mini': { inPerM: 0.75, cachedInPerM: 0.075, outPerM: 4.5, checkedAt: '2026-11-03', verified: false },
+  'gpt-5.6-terra': { inPerM: 2.0, cachedInPerM: 0.2, outPerM: 12.0, checkedAt: '2026-11-04', verified: true },
+  'gpt-5.6-luna': { inPerM: 0.2, cachedInPerM: 0.02, outPerM: 1.2, checkedAt: '2026-11-04', verified: true },
+  'gpt-5.4-mini': { inPerM: 0.75, cachedInPerM: 0.075, outPerM: 4.5, checkedAt: '2026-11-04', verified: true },
 };
 
 export const MODEL_ALIAS: Readonly<Record<string, string>> = {};
 
-export function priceKeyFor(model: string | null): string | null {
+export function priceKeyFor(
+  model: string | null,
+  prices: Readonly<Record<string, ModelPrice>> = LLM_PRICES,
+  aliases: Readonly<Record<string, string>> = MODEL_ALIAS,
+): string | null {
   if (!model) return null;
   // hasOwn on both: a model id like "toString" must not resolve to Object.prototype.
-  if (Object.hasOwn(MODEL_ALIAS, model)) return MODEL_ALIAS[model];
-  return Object.hasOwn(LLM_PRICES, model) ? model : null;
+  if (Object.hasOwn(aliases, model)) {
+    const target = aliases[model];
+    return Object.hasOwn(prices, target) ? target : null;
+  }
+  return Object.hasOwn(prices, model) ? model : null;
 }
 
 /**

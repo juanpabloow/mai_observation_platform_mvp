@@ -9,13 +9,16 @@ import type { CostRow, ProjectRow, UsageRow } from '../../analytics/openaiBillin
 export interface OpenAiConnectionStatus {
   key_hint: string;
   created_at: Date;
+  /** Last SUCCESSFUL sync. A failed attempt leaves it as it was. */
   last_synced_at: Date | null;
+  /** Last attempt, successful or not. */
+  last_attempt_at: Date | null;
   last_sync_error: string | null;
 }
 
 export async function getOpenAiConnectionStatus(tenantId: string): Promise<OpenAiConnectionStatus | null> {
   const r = await query<OpenAiConnectionStatus>(
-    `SELECT key_hint, created_at, last_synced_at, last_sync_error FROM openai_connections WHERE tenant_id = $1`,
+    `SELECT key_hint, created_at, last_synced_at, last_attempt_at, last_sync_error FROM openai_connections WHERE tenant_id = $1`,
     [tenantId],
   );
   return r.rows[0] ?? null;

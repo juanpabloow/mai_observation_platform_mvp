@@ -64,6 +64,26 @@ export interface DayCost {
   byClient: Record<string, number>;
   /** Tokens (input + output) of the day per business — priced or not. Drives the invoice split. */
   tokensByClient: Record<string, number>;
+  /** Tokens of the day per business whose model has no price: `usd` leaves them out. */
+  unpricedTokensByClient: Record<string, number>;
+  /** Some of the day's tokens have no price, so `usd` (if any) is only part of the day. */
+  partial: boolean;
+}
+
+/**
+ * What the period's money can say, from the bots' usage alone (the OpenAI sync error is shown
+ * apart: it does not change these estimates).
+ *   no_activity  no model call at all                → «sin llamadas», never US$0 of spend
+ *   unpriced     calls, but none of their models has a price → «sin precio»
+ *   partial      some priced, some not               → «US$X + sin precio»
+ *   priced       every token priced                  → US$X
+ */
+export type CostState = 'no_activity' | 'unpriced' | 'partial' | 'priced';
+
+export function costStateOf(t: Pick<TokenTotals, 'calls' | 'cost'>): CostState {
+  if (t.calls === 0) return 'no_activity';
+  if (t.cost.usd === null) return 'unpriced';
+  return t.cost.partial ? 'partial' : 'priced';
 }
 
 export interface MeetingsCost {
@@ -83,6 +103,9 @@ export interface AiCostDashboard {
   meetings: MeetingsCost;
   coverage: { total: number; scanned: number; unscanned: number; withoutData: number };
   prices: Array<ModelPrice & { model: string }>;
+  state: CostState;
+  /** Models of the period that have tokens and no price (null = n8n did not say which). */
+  unpricedModels: Array<{ model: string | null; calls: number; inputTokens: number; outputTokens: number }>;
 }
 
 const UNASSIGNED = 'Sin negocio asignado';
@@ -123,7 +146,10 @@ export function buildAiCostDashboard(input: {
   const workflows = new Map<string, WorkflowCost>();
   const models = new Map<string, ModelCost>();
   const daily = new Map<string, DayCost>(
-    input.days.map((day) => [day, { day, calls: 0, inputTokens: 0, outputTokens: 0, usd: null, byClient: {}, tokensByClient: {} }]),
+    input.days.map((day) => [
+      day,
+      { day, calls: 0, inputTokens: 0, outputTokens: 0, usd: null, byClient: {}, tokensByClient: {}, unpricedTokensByClient: {}, partial: false },
+    ]),
   );
   const coverageByWf = new Map(input.coverage.map((c) => [c.n8n_workflow_id, c]));
 
@@ -173,12 +199,15 @@ export function buildAiCostDashboard(input: {
       d.calls += row.calls;
       d.inputTokens += row.input_tokens;
       d.outputTokens += row.output_tokens;
-      const tk = row.client_id ?? '';
-      d.tokensByClient[tk] = (d.tokensByClient[tk] ?? 0) + row.input_tokens + row.output_tokens;
+      const ck = row.client_id ?? '';
+      const tokens = row.input_tokens + row.output_tokens;
+      d.tokensByClient[ck] = (d.tokensByClient[ck] ?? 0) + tokens;
       if (usd !== null) {
         d.usd = (d.usd ?? 0) + usd;
-        const ck = row.client_id ?? '';
         d.byClient[ck] = (d.byClient[ck] ?? 0) + usd;
+      } else if (tokens > 0) {
+        d.unpricedTokensByClient[ck] = (d.unpricedTokensByClient[ck] ?? 0) + tokens;
+        d.partial = true;
       }
     }
   }
@@ -214,6 +243,16 @@ export function buildAiCostDashboard(input: {
   }
   coverage.unscanned = coverage.total - coverage.scanned;
 
+  const unpricedModels = new Map<string, AiCostDashboard['unpricedModels'][number]>();
+  for (const m of models.values()) {
+    if (m.price || m.inputTokens + m.outputTokens === 0) continue;
+    const u = unpricedModels.get(m.model ?? '') ?? { model: m.model, calls: 0, inputTokens: 0, outputTokens: 0 };
+    u.calls += m.calls;
+    u.inputTokens += m.inputTokens;
+    u.outputTokens += m.outputTokens;
+    unpricedModels.set(m.model ?? '', u);
+  }
+
   const byCost = (a: TokenTotals, b: TokenTotals) =>
     (b.cost.usd ?? -1) - (a.cost.usd ?? -1) || b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens);
 
@@ -227,6 +266,8 @@ export function buildAiCostDashboard(input: {
     meetings,
     coverage,
     prices: Object.entries(LLM_PRICES).map(([model, p]) => ({ model, ...p })),
+    state: costStateOf(totals),
+    unpricedModels: [...unpricedModels.values()].sort((a, b) => b.calls - a.calls),
   };
 }
 

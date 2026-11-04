@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { extractLlmUsage } from '../../src/analytics/llmUsage.js';
 import { llmCostUsd, priceKeyFor } from '../../src/analytics/llmPricing.js';
 import { buildAiCostDashboard, compareAiCosts } from '../../src/analytics/aiCostModel.js';
-import { renderAiCostCsv, renderAiCostMarkdown, reportFileStem } from '../../src/analytics/aiCostReport.js';
+import { dayMoneyText, renderAiCostCsv, renderAiCostMarkdown, reportFileStem } from '../../src/analytics/aiCostReport.js';
 import { baselineInputFrom, monthEarlier, resolveBaseline } from '../../src/analytics/aiCostPeriods.js';
 
 /** One LangChain model sub-node run, shaped like the ingested n8n payloads (no real content). */
@@ -217,4 +217,85 @@ test('comparison of periods with different lengths uses daily averages for total
   assert.deepEqual(c.changes.costUsd, { kind: 'pct', pct: 0 });
   assert.deepEqual(c.changes.calls, { kind: 'pct', pct: 0 });
   assert.deepEqual(c.changes.inputPerCall, { kind: 'pct', pct: 0 });
+});
+
+/* ---------------------------------------------- tarifas, alias y estados (2026-11-04) -- */
+
+test('pricing: gpt-5.6-luna has its own verified rate, not terra\'s; a dated id is not guessed', () => {
+  assert.equal(priceKeyFor('gpt-5.6-luna'), 'gpt-5.6-luna');
+  // 1M input at $0.20 + 1M output at $1.20 (developers.openai.com/api/docs/pricing, Standard, short context)
+  assert.equal(llmCostUsd('gpt-5.6-luna', 1_000_000, 1_000_000), 1.4);
+  assert.notEqual(llmCostUsd('gpt-5.6-luna', 1_000_000, 0), llmCostUsd('gpt-5.6-terra', 1_000_000, 0));
+  for (const id of ['gpt-5.6-luna-2026-10-25', 'GPT-5.6-LUNA', 'gpt-5.6', 'luna']) {
+    assert.equal(priceKeyFor(id), null, `${id} must stay «sin precio» until it is listed`);
+    assert.equal(llmCostUsd(id, 1_000_000, 0), null);
+  }
+});
+
+test('pricing: an explicit alias resolves to its target; an alias to an unlisted target is null', () => {
+  const prices = { 'modelo-a': { inPerM: 1, cachedInPerM: null, outPerM: 2, checkedAt: '2026-11-04', verified: true } };
+  const aliases = { 'modelo-a-2026-10-01': 'modelo-a', 'modelo-b-2026-10-01': 'modelo-b' };
+  assert.equal(priceKeyFor('modelo-a-2026-10-01', prices, aliases), 'modelo-a');
+  assert.equal(priceKeyFor('modelo-b-2026-10-01', prices, aliases), null);
+  assert.equal(priceKeyFor('modelo-a-2026-10-02', prices, aliases), null, 'no prefix matching');
+  assert.equal(priceKeyFor('hasOwnProperty', prices, aliases), null);
+});
+
+test('dashboard: four states — no activity, activity without a price, partial, priced', () => {
+  const build = (usage: ReturnType<typeof usageRow>[]) =>
+    buildAiCostDashboard({ days: ['2026-11-01', '2026-11-02'], usage, coverage: [], activity: [], meetings: [] });
+
+  const none = build([]);
+  assert.equal(none.state, 'no_activity');
+  assert.equal(none.totals.cost.usd, null, 'no activity is not US$0 of spend either');
+  assert.deepEqual(none.unpricedModels, []);
+
+  const unpriced = build([usageRow({ model: 'modelo-sin-tarifa', calls: 7 })]);
+  assert.equal(unpriced.state, 'unpriced');
+  assert.equal(unpriced.totals.cost.usd, null, 'never converted to 0');
+  assert.deepEqual(unpriced.daily.map((d) => [d.usd, d.partial, d.calls]), [[null, true, 7], [null, false, 0]]);
+  assert.deepEqual(unpriced.unpricedModels, [{ model: 'modelo-sin-tarifa', calls: 7, inputTokens: 1_000_000, outputTokens: 0 }]);
+
+  const partial = build([usageRow({}), usageRow({ model: 'modelo-sin-tarifa', calls: 3 })]);
+  assert.equal(partial.state, 'partial');
+  assert.equal(partial.totals.cost.usd, 2);
+  assert.equal(partial.daily[0].usd, 2);
+  assert.equal(partial.daily[0].partial, true, 'the same day mixes priced and unpriced calls');
+  assert.deepEqual(partial.daily[0].unpricedTokensByClient, { c1: 1_000_000 });
+
+  const priced = build([usageRow({}), usageRow({ model: 'gpt-5.6-luna', day: '2026-11-02' })]);
+  assert.equal(priced.state, 'priced');
+  assert.deepEqual(priced.daily.map((d) => d.partial), [false, false]);
+  assert.ok(Math.abs((priced.totals.cost.usd ?? 0) - 2.2) < 1e-9, 'terra $2 + luna $0.20 for 1M input each');
+});
+
+test('history: a model switch on 25 Oct is priced at read time once the model is listed — no stored amounts', () => {
+  // Synthetic copy of the observed pattern: terra until 24 Oct, luna from 25 Oct. The usage rows
+  // hold tokens only, so the same rows price differently as soon as the catalog has the model.
+  const days = ['2026-10-24', '2026-10-25', '2026-10-26'];
+  const usage = [
+    usageRow({ day: '2026-10-24', model: 'gpt-5.6-terra', calls: 90, input_tokens: 500_000, output_tokens: 10_000 }),
+    usageRow({ day: '2026-10-25', model: 'gpt-5.6-luna', calls: 101, input_tokens: 600_000, output_tokens: 12_000 }),
+    usageRow({ day: '2026-10-26', model: 'gpt-5.6-luna', calls: 78, input_tokens: 450_000, output_tokens: 9_000 }),
+    // A day where an unlisted id appears next to luna stays partial, not complete.
+    usageRow({ day: '2026-10-26', model: 'gpt-5.6-luna-2026-10-25', calls: 2, input_tokens: 10_000, output_tokens: 100 }),
+  ];
+  const d = buildAiCostDashboard({ days, usage, coverage: [], activity: [], meetings: [] });
+  const [oct24, oct25, oct26] = d.daily;
+  assert.ok(Math.abs((oct24.usd ?? 0) - (0.5 * 2 + 0.01 * 12)) < 1e-9);
+  assert.ok(Math.abs((oct25.usd ?? 0) - (0.6 * 0.2 + 0.012 * 1.2)) < 1e-9);
+  assert.equal(oct25.partial, false);
+  assert.ok(Math.abs((oct26.usd ?? 0) - (0.45 * 0.2 + 0.009 * 1.2)) < 1e-9);
+  assert.equal(oct26.partial, true);
+  assert.equal(d.state, 'partial');
+  assert.deepEqual(d.unpricedModels.map((m) => m.model), ['gpt-5.6-luna-2026-10-25']);
+  assert.equal(d.byModel.find((m) => m.model === 'gpt-5.6-luna')?.price?.key, 'gpt-5.6-luna');
+  assert.ok(d.prices.some((p) => p.model === 'gpt-5.6-luna' && p.verified), '«Precios usados» lists it');
+});
+
+test('report: a day is «sin precio», «US$X + sin precio» or «—», never US$0 for unknown', () => {
+  assert.equal(dayMoneyText({ usd: null, calls: 0 }), '—');
+  assert.equal(dayMoneyText({ usd: null, calls: 5 }), 'sin precio');
+  assert.equal(dayMoneyText({ usd: 1.5, calls: 5, partial: true }), 'US$1,50 + sin precio');
+  assert.equal(dayMoneyText({ usd: 1.5, calls: 5, partial: false }), 'US$1,50');
 });

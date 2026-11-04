@@ -2,7 +2,8 @@ import { strict as assert } from 'node:assert';
 import { after, test } from 'node:test';
 import { query } from '../../src/db/client.js';
 import { encrypt } from '../../src/crypto.js';
-import { syncOpenAiForTenant } from '../../src/analytics/syncOpenAi.js';
+import { isOpenAiSyncStale, manualSyncWaitMs, syncOpenAiForTenant } from '../../src/analytics/syncOpenAi.js';
+import type { RetryPolicy } from '../../src/openai/adminClient.js';
 import {
   getOpenAiConnectionStatus,
   listBilledDays,
@@ -100,4 +101,59 @@ test('project → business: one project per business, moved not duplicated, neve
   assert.equal(await setClientOpenAiProject({ tenantId: s.tenantId, clientId: s.defaultClientId, projectId: 'proj_d' }), false, 'the default client has no project');
   assert.equal(await setClientOpenAiProject({ tenantId: s.tenantId, clientId: s.otherClientId, projectId: null }), true);
   assert.deepEqual(await listClientProjectMap(s.tenantId), []);
+});
+
+test('a 429 during sync: retried a bounded number of times, old figures and last success kept, shown as stale', async () => {
+  const s = await seedScenario();
+  tenants.push(s.tenantId);
+  await upsertOpenAiConnection({ tenantId: s.tenantId, keyEncrypted: encrypt('sk-admin-' + 'y'.repeat(40)), keyHint: 'yyyy', userId: null });
+  assert.equal((await syncOpenAiForTenant(s.tenantId, NOW, fakeOpenAi({ '2026-11-02': 3 }))).ok, true);
+  const before = await getOpenAiConnectionStatus(s.tenantId);
+  assert.ok(before?.last_synced_at);
+  assert.equal(isOpenAiSyncStale(before!, NOW), false);
+
+  // OpenAI keeps answering 429 (rate limit): no real API, no real waiting.
+  let requests = 0;
+  const limited = (async () => {
+    requests += 1;
+    return new Response(JSON.stringify({ error: { type: 'rate_limit_error', code: null, message: 'sintético' } }), { status: 429 });
+  }) as typeof fetch;
+  const sleeps: number[] = [];
+  const policy: RetryPolicy = { retries: 2, baseDelayMs: 10, maxDelayMs: 1_000, sleep: async (ms) => void sleeps.push(ms), random: () => 0 };
+  const res = await syncOpenAiForTenant(s.tenantId, NOW, limited, policy);
+  assert.equal(res.ok, false);
+  assert.equal(requests, 3, 'costs: 1 attempt + 2 retries, then the sync stops (usage and projects are not hammered)');
+  assert.equal(sleeps.length, 2);
+
+  const after = await getOpenAiConnectionStatus(s.tenantId);
+  assert.match(after?.last_sync_error ?? '', /429/);
+  assert.equal(after?.last_synced_at?.getTime(), before!.last_synced_at!.getTime(), 'a failure is not a success');
+  assert.ok(after?.last_attempt_at && after.last_attempt_at >= before!.last_synced_at!);
+  assert.deepEqual(await listBilledDays(s.tenantId, '2026-10-01', '2026-11-03'), [{ day: '2026-11-02', amount_usd: 3 }], 'previous data kept');
+  assert.equal(isOpenAiSyncStale(after!, NOW), true);
+  assert.ok(manualSyncWaitMs(after!.last_attempt_at, new Date()) > 0, '«Sincronizar ahora» waits after a failed attempt');
+
+  // Quota / billing 429: one request only, a message that says retrying will not help.
+  requests = 0;
+  const quota = (async () => {
+    requests += 1;
+    return new Response(JSON.stringify({ error: { type: 'insufficient_quota', code: 'credit_balance_exhausted' } }), { status: 429 });
+  }) as typeof fetch;
+  const q = await syncOpenAiForTenant(s.tenantId, NOW, quota, policy);
+  assert.equal(q.ok, false);
+  assert.equal(requests, 1);
+  assert.match((await getOpenAiConnectionStatus(s.tenantId))?.last_sync_error ?? '', /saldo, cuota o límite de gasto \(credit_balance_exhausted\)/);
+  assert.equal((await listBilledDays(s.tenantId, '2026-10-01', '2026-11-03')).length, 1);
+});
+
+test('stale and cooldown rules', () => {
+  const now = new Date('2026-11-04T12:00:00Z');
+  const h = (n: number) => new Date(now.getTime() - n * 3600_000);
+  assert.equal(isOpenAiSyncStale({ last_synced_at: h(5), last_sync_error: null }, now), false);
+  assert.equal(isOpenAiSyncStale({ last_synced_at: h(13), last_sync_error: null }, now), true, 'two missed worker rounds');
+  assert.equal(isOpenAiSyncStale({ last_synced_at: h(1), last_sync_error: 'OpenAI respondió 429.' }, now), true);
+  assert.equal(isOpenAiSyncStale({ last_synced_at: null, last_sync_error: null }, now), true);
+  assert.equal(manualSyncWaitMs(null, now), 0);
+  assert.equal(manualSyncWaitMs(new Date(now.getTime() - 20_000), now), 40_000);
+  assert.equal(manualSyncWaitMs(new Date(now.getTime() - 90_000), now), 0);
 });

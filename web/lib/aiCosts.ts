@@ -28,6 +28,7 @@ import {
   type BilledModelRow,
   type OpenAiProjectView,
 } from "@worker/db/repositories/openaiBilling.js";
+import { isOpenAiSyncStale } from "@worker/analytics/syncOpenAi.js";
 import { splitBilling, type BillingSplit, type ClientSplit, type DayTokens } from "@worker/analytics/billingSplit.js";
 import {
   listAiClientActivity,
@@ -91,8 +92,13 @@ export interface ClientBilling {
 export interface OpenAiBilling {
   connected: boolean;
   keyHint: string | null;
+  /** Last successful sync (ISO). A failed attempt does not move it. */
   lastSyncedAt: string | null;
+  /** Last attempt, successful or not (ISO). */
+  lastAttemptAt: string | null;
   lastSyncError: string | null;
+  /** The stored figures may be behind OpenAI: the last attempt failed, or no success in a while. */
+  stale: boolean;
   /** null = no data stored for the period (not connected yet, or no sync). */
   totalUsd: number | null;
   previousTotalUsd: number | null;
@@ -146,7 +152,9 @@ async function loadBilling(
     connected: status !== null,
     keyHint: status?.key_hint ?? null,
     lastSyncedAt: status?.last_synced_at ? status.last_synced_at.toISOString() : null,
+    lastAttemptAt: status?.last_attempt_at ? status.last_attempt_at.toISOString() : null,
     lastSyncError: status?.last_sync_error ?? null,
+    stale: status !== null && isOpenAiSyncStale(status),
     totalUsd: sum(days),
     previousTotalUsd: sum(prevDays),
     days,
