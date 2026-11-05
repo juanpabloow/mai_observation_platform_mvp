@@ -197,6 +197,11 @@ export interface BoardOpportunityRow {
   appt_tz: string | null;
   /** The appointment's list price (price_snapshot) — only for a viewer with payments.view. */
   appt_list_price: string | null;
+  /** JP-9: the appointment id (Confirmar / Cobrar target), its service name, and the artist's name
+   *  (for the Reservó/Asistió card lines + the "Recordar" reminder text). */
+  appt_id: string | null;
+  appt_service: string | null;
+  appt_staff_name: string | null;
   /** The contact's assigned owner (avatar/initials), when one is set. */
   owner_user_id: string | null;
   owner_name: string | null;
@@ -284,6 +289,7 @@ export async function listBoardOpportunities(tenantId: string, clientId: string,
             pay.paid_total, pay.paid_method,
             o.qualification_service, o.qualification_timeframe, o.qualified_by, qu.name AS qualified_by_name,
             appt.start_at AS appt_start_at, appt.status AS appt_status, appt.price_snapshot AS appt_list_price, appt.tz AS appt_tz,
+            appt.id AS appt_id, appt.service_name_snapshot AS appt_service, appt.staff_name AS appt_staff_name,
             ct.assigned_to AS owner_user_id, ou.name AS owner_name
        FROM opportunities o
        JOIN contacts ct ON ct.id = o.contact_id AND ct.tenant_id = o.tenant_id
@@ -300,9 +306,11 @@ export async function listBoardOpportunities(tenantId: string, clientId: string,
        LEFT JOIN LATERAL (
          -- The sale's most recent non-cancelled appointment: the upcoming one for a booked sale,
          -- the completed one for an attended/paid sale. Drives the Reservó / Asistió card lines.
-         SELECT ap.start_at, ap.status, ap.price_snapshot::text AS price_snapshot, si.timezone AS tz
+         SELECT ap.id, ap.start_at, ap.status, ap.price_snapshot::text AS price_snapshot,
+                ap.service_name_snapshot, si.timezone AS tz, st.name AS staff_name
            FROM appointments ap
            JOIN sites si ON si.id = ap.site_id AND si.tenant_id = ap.tenant_id
+           LEFT JOIN staff st ON st.id = ap.staff_id AND st.tenant_id = ap.tenant_id
           WHERE ap.tenant_id = o.tenant_id AND ap.opportunity_id = o.id AND ap.status <> 'cancelled'
           ORDER BY ap.start_at DESC, ap.id DESC LIMIT 1
        ) appt ON true
@@ -417,6 +425,22 @@ export async function getCohortFunnel(
   return r.rows[0];
 }
 
+/** JP-9: the earliest month that has opportunity data (opened = COALESCE(lead_at, created_at)),
+ *  excluding test data — so the cohort month menu runs from here to the current month. Null = none. */
+export async function getEarliestCohortMonth(tenantId: string, clientId: string): Promise<Date | null> {
+  const r = await query<{ first: Date | null }>(
+    `SELECT MIN(COALESCE(o.lead_at, o.created_at)) AS first
+       FROM opportunities o
+       JOIN contacts ct ON ct.id = o.contact_id AND ct.tenant_id = o.tenant_id
+       LEFT JOIN attribution_touches ft ON ft.id = ct.first_touch_id AND ft.tenant_id = o.tenant_id
+       LEFT JOIN ads ad ON ad.id = ft.ad_id AND ad.tenant_id = o.tenant_id
+      WHERE o.tenant_id = $1 AND o.client_id = $2
+        AND (ad.is_test IS NOT TRUE) AND (upper(btrim(ct.name)) IS DISTINCT FROM 'TEST')`,
+    [tenantId, clientId],
+  );
+  return r.rows[0]?.first ?? null;
+}
+
 /** The "sin respuesta del negocio" queue: OPEN lead/qualified opportunities whose conversation's
  *  last message is from the CUSTOMER (PL-1 never auto-loses these). Longest wait first. */
 export interface AwaitingReplyRow {
@@ -448,6 +472,37 @@ export async function listAwaitingBusinessReply(tenantId: string, clientId: stri
       ORDER BY lm.created_at ASC
       LIMIT $3`,
     [tenantId, clientId, Math.min(Math.max(limit, 1), 500)],
+  );
+  return r.rows;
+}
+
+/**
+ * JP-9: the "Sin respuesta" follow-up queue — open Lead/Calificado sales where the BUSINESS spoke
+ * last and the customer has not replied for ≥ SIN_RESPUESTA_HOURS. These are follow-up candidates
+ * BEFORE the 72 h auto-lost sweep. Distinct from "Te esperan" (where the CUSTOMER spoke last and the
+ * business owes the reply). Longest-waiting first.
+ */
+export const SIN_RESPUESTA_HOURS = 24;
+export async function listNeedsFollowup(tenantId: string, clientId: string, limit = 200): Promise<AwaitingReplyRow[]> {
+  const r = await query<AwaitingReplyRow>(
+    `SELECT o.id, o.contact_id, o.conversation_id, cv.conversation_ref, o.stage,
+            ct.name AS contact_name, ct.channel_user_id AS contact_channel_user_id, ct.phone_e164 AS contact_phone_e164,
+            lm.created_at AS last_message_at
+       FROM opportunities o
+       JOIN contacts ct ON ct.id = o.contact_id AND ct.tenant_id = o.tenant_id
+       LEFT JOIN conversations cv ON cv.id = o.conversation_id AND cv.tenant_id = o.tenant_id
+       JOIN LATERAL (
+         SELECT hm.sender, hm.created_at FROM handoff_messages hm
+          WHERE hm.tenant_id = o.tenant_id AND hm.conversation_id = o.conversation_id
+          ORDER BY hm.created_at DESC, hm.id DESC LIMIT 1
+       ) lm ON true
+      WHERE o.tenant_id = $1 AND o.client_id = $2 AND o.status = 'open' AND o.stage IN ('lead','qualified')
+        AND o.conversation_id IS NOT NULL
+        AND lm.sender IN ('bot','human_agent')
+        AND lm.created_at <= now() - make_interval(hours => $3::int)
+      ORDER BY lm.created_at ASC
+      LIMIT $4`,
+    [tenantId, clientId, SIN_RESPUESTA_HOURS, Math.min(Math.max(limit, 1), 500)],
   );
   return r.rows;
 }

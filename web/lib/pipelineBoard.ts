@@ -2,8 +2,9 @@ import type { BoardOpportunityRow, LostReason, OpportunityStage, OpportunityStat
 
 export type { LostReason, OpportunityStage, OpportunityStatus };
 import { originColumnAdName, originColumnChip, originColumnDetail } from "./originDisplay";
-import { displayContactName } from "./contactName";
+import { displayContactName, isMeaningfulName, maskPhone } from "./contactName";
 import { dayShort, fmtTime, siteDayKey, todayAtSite } from "./siteCalendar";
+import { relativeAgeShort } from "./format";
 
 /**
  * JP-7 STALE thresholds — a calm "this has waited too long" state, never error red. Reported here
@@ -90,6 +91,19 @@ export interface BoardCard {
   owner: { userId: string; name: string | null } | null;
   /** A calm "waited too long" state with a short reason, or null. */
   stale: { reason: string } | null;
+  // ── JP-9 ──
+  /** The contact avatar glyph: initials for a real name, "#" for a masked-phone contact, "?" for a
+   *  nameless one. */
+  avatar: string;
+  /** True when the display name is the neutral "Sin nombre" (render it muted + italic). */
+  nameMuted: boolean;
+  /** The sale's appointment: id (Confirmar/Cobrar target), service name, and the artist's name. */
+  apptId: string | null;
+  apptService: string | null;
+  apptStaffName: string | null;
+  /** Whether the sale has ANY recorded payment — UNGATED (drives "unpaid" urgency regardless of the
+   *  viewer's payments.view; the amount itself stays gated via paidAmount/apptListAmount). */
+  hasPayment: boolean;
 }
 
 /** "Bot" for the assistant, a person's first name for a user, null for system/implicit/none. */
@@ -124,6 +138,18 @@ export function whoSpokeLast(sender: string | null): "business" | "customer" | n
 
 /** `showAmounts` is the viewer's payments.view — when false, a card shows no money. `nowMs` is the
  *  clock the stale thresholds are measured against (the server passes its clock at render). */
+/** The avatar glyph for a contact: initials from a real name (skipping leading symbols), "#" for a
+ *  masked-phone contact, "?" for a nameless one. */
+export function contactAvatar(name: string | null, phoneE164: string | null, channelUserId: string | null): { avatar: string; nameMuted: boolean } {
+  if (isMeaningfulName(name)) {
+    const words = name!.trim().split(/\s+/).map((w) => w.match(/[\p{L}\p{N}]/u)?.[0] ?? "").filter(Boolean);
+    const initials = (words[0] ?? "") + (words.length > 1 ? words[words.length - 1] : "");
+    return { avatar: (initials || "·").toLocaleUpperCase("es").slice(0, 2), nameMuted: false };
+  }
+  if (maskPhone(phoneE164) ?? maskPhone(channelUserId)) return { avatar: "#", nameMuted: false };
+  return { avatar: "?", nameMuted: true };
+}
+
 export function toBoardCard(row: BoardOpportunityRow, showAmounts = true, nowMs = Date.now()): BoardCard {
   const originSource = {
     originKind: row.origin_kind,
@@ -132,6 +158,7 @@ export function toBoardCard(row: BoardOpportunityRow, showAmounts = true, nowMs 
     adIsTest: row.ad_is_test,
     campaignName: row.campaign_name,
   };
+  const av = contactAvatar(row.contact_name, row.contact_phone_e164, row.contact_channel_user_id);
   return {
     id: row.id,
     contactId: row.contact_id,
@@ -160,6 +187,12 @@ export function toBoardCard(row: BoardOpportunityRow, showAmounts = true, nowMs 
     apptListAmount: showAmounts ? row.appt_list_price : null,
     owner: row.owner_user_id ? { userId: row.owner_user_id, name: row.owner_name } : null,
     stale: computeStale(row, nowMs),
+    avatar: av.avatar,
+    nameMuted: av.nameMuted,
+    apptId: row.appt_id,
+    apptService: row.appt_service,
+    apptStaffName: row.appt_staff_name,
+    hasPayment: row.paid_total != null,
   };
 }
 
@@ -189,6 +222,79 @@ function nextDay(dayKey: string): string {
   const [y, m, d] = dayKey.split("-").map(Number);
   const n = new Date(Date.UTC(y, m - 1, d + 1));
   return `${n.getUTCFullYear()}-${String(n.getUTCMonth() + 1).padStart(2, "0")}-${String(n.getUTCDate()).padStart(2, "0")}`;
+}
+
+/** JP-9 Reservó/Asistió line: "Hoy · 11:30 · Corte" / "Mañana · 10:30 · Corte" / "sáb 8 nov · 17:00 ·
+ *  Corte" — day · 24h time · service name. (The status is a SEPARATE line, see the card.) */
+export function apptWhenLine(card: BoardCard, now: Date = new Date()): string | null {
+  if (!card.apptStartAt || !card.apptTz) return null;
+  const tz = card.apptTz;
+  const day = siteDayKey(card.apptStartAt, tz);
+  const today = todayAtSite(tz, now);
+  const dayLabel = day === today ? "Hoy" : day === nextDay(today) ? "Mañana" : dayShort(day);
+  const time = fmtTime(card.apptStartAt, tz, "24");
+  const service = card.apptService?.trim() || "Cita";
+  return `${dayLabel} · ${time} · ${service}`;
+}
+
+/** Whether the sale's appointment is TODAY at its site (drives the Reservó "sin confirmar" urgency). */
+export function apptIsToday(card: BoardCard, now: Date = new Date()): boolean {
+  if (!card.apptStartAt || !card.apptTz) return false;
+  return siteDayKey(card.apptStartAt, card.apptTz) === todayAtSite(card.apptTz, now);
+}
+
+/** "Hoy" / "Mañana" / "sáb 8 nov" for the sale's appointment day (future-oriented, for Reservó). */
+export function apptDayLabel(card: BoardCard, now: Date = new Date()): string | null {
+  if (!card.apptStartAt || !card.apptTz) return null;
+  const day = siteDayKey(card.apptStartAt, card.apptTz);
+  const today = todayAtSite(card.apptTz, now);
+  return day === today ? "Hoy" : day === nextDay(today) ? "Mañana" : dayShort(day);
+}
+
+/** "hoy" / "ayer" / "23 oct" for a PAST appointment day (for the Asistió line). */
+export function apptDatePhrase(card: BoardCard, now: Date = new Date()): string | null {
+  if (!card.apptStartAt || !card.apptTz) return null;
+  const day = siteDayKey(card.apptStartAt, card.apptTz);
+  const today = todayAtSite(card.apptTz, now);
+  if (day === today) return "hoy";
+  if (nextDay(day) === today) return "ayer";
+  const [, m, d] = day.split("-").map(Number);
+  return `${d} ${MES_ABBR[m - 1]}`;
+}
+
+/** "hace 28 m" → "28 m" (drop the "hace" for inline "· 28 m" lines). Reuses the app's single
+ *  relative-age helper so the wording stays identical everywhere. */
+export function agoShort(from: string | Date, now: Date = new Date()): string {
+  return relativeAgeShort(from, now).replace(/^hace /, "");
+}
+/** "hace 28 m" → "28m" (compact, for the card's top-right time). */
+export function agoCompact(from: string | Date, now: Date = new Date()): string {
+  return agoShort(from, now).replace(/\s+/g, "");
+}
+
+/** JP-9 "Recordar": the reminder MESSAGE pre-typed into the Inbox composer (never auto-sent). */
+export function reminderText(card: BoardCard, now: Date = new Date()): string {
+  const greeting = card.nameMuted ? "Hola" : `Hola ${card.name}`;
+  const service = (card.apptService?.trim() || "cita").toLocaleLowerCase("es");
+  const day = (apptDayLabel(card, now) ?? "").toLocaleLowerCase("es");
+  const time = card.apptStartAt && card.apptTz ? fmtTime(card.apptStartAt, card.apptTz, "24") : "";
+  const withStaff = card.apptStaffName ? ` con ${card.apptStaffName}` : "";
+  return `${greeting}, te recordamos tu cita de ${service} ${day} a las ${time}${withStaff}.`;
+}
+
+export type UrgencyKind = "lead_waiting" | "reservo_today_unconfirmed" | "asistio_overdue" | null;
+
+/** JP-9 urgency (one meaning per colour): a customer waiting on a Lead, a Reservó appointment TODAY
+ *  not yet confirmed, or an Asistió sale unpaid for MORE than a day. Only these are "urgent". */
+export function cardUrgency(card: BoardCard, now: Date = new Date()): UrgencyKind {
+  const nowMs = now.getTime();
+  if (card.stage === "lead" && card.spokeLast === "customer") return "lead_waiting";
+  if (card.stage === "booked" && apptIsToday(card, now) && card.apptStatus !== "confirmed") return "reservo_today_unconfirmed";
+  if (card.stage === "attended" && !card.hasPayment) {
+    const since = card.stageSince ? nowMs - new Date(card.stageSince).getTime() : 0;
+    if (since > 86_400_000) return "asistio_overdue";
+  }
+  return null;
 }
 
 export interface StageTotals {
@@ -244,31 +350,27 @@ export function funnelSteps(cards: BoardCard[]): FunnelStep[] {
  */
 export const COHORT_SETTLING_DAYS = 14;
 
-export type CohortPreset = "mes_pasado" | "hace_30_60" | "ultimos_30" | "ultimos_90" | "custom";
-const COHORT_PRESETS: CohortPreset[] = ["mes_pasado", "hace_30_60", "ultimos_30", "ultimos_90", "custom"];
-export const COHORT_PRESET_LABEL: Record<CohortPreset, string> = {
-  mes_pasado: "Mes pasado",
-  hace_30_60: "Hace 30–60 días",
-  ultimos_30: "Últimos 30 días",
-  ultimos_90: "Últimos 90 días",
-  custom: "Personalizado",
-};
-/** The DEFAULT cohort period — a CLOSED, settled month (clearest to read; see the report). */
-export const DEFAULT_COHORT_PRESET: CohortPreset = "mes_pasado";
-
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const MES_ABBR = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_RE = /^\d{4}-\d{2}$/;
 const iso = (d: Date) => d.toISOString();
 const utcMidnight = (y: number, m0: number, d: number) => new Date(Date.UTC(y, m0, d));
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const monthKey = (y: number, m0: number) => `${y}-${pad2(m0 + 1)}`;
 
+/**
+ * JP-9: the cohort period is a CALENDAR MONTH ("2026-10") or a CUSTOM day range ("custom" + ff/ft).
+ * Default = the last CLOSED month. A period reaching the last COHORT_SETTLING_DAYS is "en curso".
+ */
 export interface CohortPeriod {
-  preset: CohortPreset;
+  /** 'YYYY-MM' for a month, or 'custom'. */
+  key: string;
   fromIso: string;
   toIso: string;
-  /** Period chip label, e.g. "Mes pasado". */
+  /** "Leads de octubre" / "Leads del 15 oct al 10 nov". */
   label: string;
-  /** The "…que entraron <entrada>" fragment for the strip title, e.g. "en octubre". */
-  entrada: string;
   /** The period reaches into the last COHORT_SETTLING_DAYS → its %s can still rise. */
   inProgress: boolean;
   /** Echoed back for the custom date inputs (YYYY-MM-DD) or "". */
@@ -276,53 +378,77 @@ export interface CohortPeriod {
   customTo: string;
 }
 
-/** PURE period math (testable): preset + the clock → the cohort window + labels. */
-export function cohortPeriodRange(preset: CohortPreset, now: Date, customFrom?: string, customTo?: string): CohortPeriod {
+/** PURE period math (testable): a month key / custom range + the clock → the cohort window + label. */
+export function cohortPeriodRange(key: string, now: Date, customFrom?: string, customTo?: string): CohortPeriod {
   const nowMs = now.getTime();
-  const y = now.getUTCFullYear();
-  const m0 = now.getUTCMonth();
   let from: Date;
   let to: Date;
-  let entrada: string;
+  let label: string;
+  let resolvedKey = key;
   let cf = "";
   let ct = "";
-  if (preset === "custom" && customFrom && customTo && DAY_RE.test(customFrom) && DAY_RE.test(customTo) && customFrom <= customTo) {
+  if (key === "custom" && customFrom && customTo && DAY_RE.test(customFrom) && DAY_RE.test(customTo) && customFrom <= customTo) {
     const [fy, fm, fd] = customFrom.split("-").map(Number);
     const [ty, tm, td] = customTo.split("-").map(Number);
     from = utcMidnight(fy, fm - 1, fd);
     to = utcMidnight(ty, tm - 1, td + 1); // inclusive end day
-    entrada = `entre el ${fd} ${MESES[fm - 1]} y el ${td} ${MESES[tm - 1]}`;
+    label = `Leads del ${fd} ${MES_ABBR[fm - 1]} al ${td} ${MES_ABBR[tm - 1]}`;
     cf = customFrom;
     ct = customTo;
-  } else if (preset === "hace_30_60") {
-    from = new Date(nowMs - 60 * 86_400_000);
-    to = new Date(nowMs - 30 * 86_400_000);
-    entrada = "hace 30–60 días";
-  } else if (preset === "ultimos_30") {
-    from = new Date(nowMs - 30 * 86_400_000);
-    to = now;
-    entrada = "en los últimos 30 días";
-  } else if (preset === "ultimos_90") {
-    from = new Date(nowMs - 90 * 86_400_000);
-    to = now;
-    entrada = "en los últimos 90 días";
+  } else if (MONTH_RE.test(key)) {
+    const [y, m] = key.split("-").map(Number);
+    from = utcMidnight(y, m - 1, 1);
+    to = utcMidnight(y, m, 1);
+    label = `Leads de ${MESES[m - 1]}`;
   } else {
-    // mes_pasado (also the fallback for an invalid custom range)
-    preset = "mes_pasado";
+    // Default: the last CLOSED calendar month.
+    const y = now.getUTCFullYear();
+    const m0 = now.getUTCMonth();
     from = utcMidnight(y, m0 - 1, 1);
     to = utcMidnight(y, m0, 1);
-    const lm = (m0 + 11) % 12;
-    entrada = `en ${MESES[lm]}`;
+    resolvedKey = monthKey(from.getUTCFullYear(), from.getUTCMonth());
+    label = `Leads de ${MESES[from.getUTCMonth()]}`;
   }
   const inProgress = to.getTime() > nowMs - COHORT_SETTLING_DAYS * 86_400_000;
-  return { preset, fromIso: iso(from), toIso: iso(to), label: COHORT_PRESET_LABEL[preset], entrada, inProgress, customFrom: cf, customTo: ct };
+  return { key: resolvedKey, fromIso: iso(from), toIso: iso(to), label, inProgress, customFrom: cf, customTo: ct };
 }
 
 /** Resolve the cohort period from URL params (reads the clock here, so the page/component body does
  *  not — keeps the react-compiler "no impure call in render" rule satisfied). */
-export function resolveCohortPeriod(presetParam: string | undefined, customFrom?: string, customTo?: string): CohortPeriod {
-  const preset = (COHORT_PRESETS as string[]).includes(presetParam ?? "") ? (presetParam as CohortPreset) : DEFAULT_COHORT_PRESET;
-  return cohortPeriodRange(preset, new Date(), customFrom, customTo);
+export function resolveCohortPeriod(keyParam: string | undefined, customFrom?: string, customTo?: string): CohortPeriod {
+  return cohortPeriodRange(keyParam ?? "", new Date(), customFrom, customTo);
+}
+
+export interface CohortMonthOption {
+  key: string; // 'YYYY-MM'
+  label: string; // "Noviembre (en curso)" / "Octubre"
+  inProgress: boolean;
+}
+
+/** The month menu for the cohort selector: the current month (marked "en curso") back to the first
+ *  month with data — never stopping short of the last closed month — most recent first, capped. */
+export function cohortMonths(earliest: Date | null, now: Date): CohortMonthOption[] {
+  const curY = now.getUTCFullYear();
+  const curM0 = now.getUTCMonth();
+  const floor = utcMidnight(curY, curM0 - 1, 1); // last month — always offered (it is the default)
+  const floorKey = monthKey(floor.getUTCFullYear(), floor.getUTCMonth());
+  const earliestKey = earliest ? monthKey(earliest.getUTCFullYear(), earliest.getUTCMonth()) : floorKey;
+  const stopKey = earliestKey < floorKey ? earliestKey : floorKey;
+  const out: CohortMonthOption[] = [];
+  let y = curY;
+  let m0 = curM0;
+  for (let i = 0; i < 48; i++) {
+    const key = monthKey(y, m0);
+    const isCurrent = y === curY && m0 === curM0;
+    out.push({ key, label: cap(MESES[m0]) + (isCurrent ? " (en curso)" : ""), inProgress: isCurrent });
+    if (key <= stopKey) break;
+    m0 -= 1;
+    if (m0 < 0) {
+      m0 = 11;
+      y -= 1;
+    }
+  }
+  return out;
 }
 
 export interface CohortRaw {
@@ -438,4 +564,12 @@ export function sortByActivityDesc(cards: BoardCard[]): BoardCard[] {
     if (av !== bv) return av < bv ? 1 : -1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
+}
+
+/** JP-9 within-column order: URGENT cards first, then most-recent activity. */
+export function sortBoardColumn(cards: BoardCard[], now: Date = new Date()): BoardCard[] {
+  const byActivity = sortByActivityDesc(cards);
+  const urgent = byActivity.filter((c) => cardUrgency(c, now) !== null);
+  const rest = byActivity.filter((c) => cardUrgency(c, now) === null);
+  return [...urgent, ...rest];
 }

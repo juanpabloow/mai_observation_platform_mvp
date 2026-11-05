@@ -5,11 +5,13 @@ import { query } from '../../src/db/client.js';
 import { cleanupTenant, closeDb, seedContact, seedMember, seedScenario, seedWorkflow } from './fixtures.js';
 import { getOrCreateConversation } from '../../src/db/repositories/handoff.js';
 import {
+  SIN_RESPUESTA_HOURS,
   getCohortFunnel,
   getInboxContactPipeline,
   listAwaitingBusinessReply,
   listBoardOpportunities,
   listContactOpportunities,
+  listNeedsFollowup,
 } from '../../src/db/repositories/pipeline.js';
 
 /**
@@ -237,4 +239,25 @@ test('JP-7b §7: a contact literally named "TEST" is hidden by default (board + 
   const to = new Date(Date.now() + 86_400_000).toISOString();
   assert.equal((await getCohortFunnel(s.tenantId, s.clientId, {}, from, to)).cohort, 1, 'the TEST opp is excluded; only the real lead counts');
   assert.equal((await getCohortFunnel(s.tenantId, s.clientId, { includeTest: true }, from, to)).cohort, 2, 'includeTest counts the TEST opp too');
+});
+
+test('JP-9 tabs: "Te esperan" (customer last) vs "Sin respuesta" (business last ≥ 24 h) are disjoint', () => {
+  assert.equal(SIN_RESPUESTA_HOURS, 24, 'the follow-up threshold is a reported constant');
+});
+
+test('JP-9 listNeedsFollowup: open lead/qualified where the BUSINESS spoke last ≥ 24 h ago', async () => {
+  const s = await fixture();
+  // A: customer spoke last → "Te esperan", NOT follow-up.
+  const a = await mkContact(s); const ca = await mkConv(s, a); await mkMsg(s, ca, 'bot', 50); await mkMsg(s, ca, 'user', 3); await seedOpp(s, { contactId: a, conv: ca, stage: 'lead' });
+  // B: business spoke last 48 h ago → follow-up (≥ 24 h).
+  const b = await mkContact(s); const cb = await mkConv(s, b); await mkMsg(s, cb, 'user', 72); await mkMsg(s, cb, 'bot', 48); await seedOpp(s, { contactId: b, conv: cb, stage: 'qualified' });
+  // C: business spoke last only 2 h ago → NOT yet (under the threshold).
+  const c = await mkContact(s); const cc = await mkConv(s, c); await mkMsg(s, cc, 'user', 5); await mkMsg(s, cc, 'bot', 2); await seedOpp(s, { contactId: c, conv: cc, stage: 'lead' });
+  // D: booked (never in either queue) even though the business spoke last 48 h ago.
+  const d = await mkContact(s); const cd = await mkConv(s, d); await mkMsg(s, cd, 'bot', 48); await seedOpp(s, { contactId: d, conv: cd, stage: 'booked' });
+
+  const followup = await listNeedsFollowup(s.tenantId, s.clientId);
+  assert.deepEqual(followup.map((r) => r.contact_id), [b], 'only B: business last, ≥ 24 h, lead/qualified');
+  const teEsperan = await listAwaitingBusinessReply(s.tenantId, s.clientId);
+  assert.deepEqual(teEsperan.map((r) => r.contact_id), [a], 'Te esperan is the customer-last set (disjoint from follow-up)');
 });
