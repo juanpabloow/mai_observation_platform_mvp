@@ -193,6 +193,15 @@ paths:
   /sites:
     get:
       summary: List the resolved client's active sites
+      description: >-
+        Each site carries what an assistant needs to answer "¿a qué hora abren?" from the
+        agenda (edited in Horarios y ausencias) instead of a hardcoded prompt: `hours`
+        (weekly hours as the booking page shows them; empty = not configured, never
+        "closed"), `closed_weekdays`, the public `whatsapp` / `directions_url`, and
+        `upcoming_closures` — whole-site blocks (one-off or recurring) that end within the
+        next `closures_window_days` days, with the PUBLIC reason only (the internal block
+        text is never read). `customer_message` says "está cerrada" only for
+        `public_reason=site_closed`; any other site-wide block reads "no atiende".
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
       responses:
@@ -203,7 +212,40 @@ paths:
               schema:
                 type: object
                 properties:
-                  sites: { type: array, items: { type: object } }
+                  closures_window_days: { type: integer, example: 14 }
+                  sites:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        slug: { type: string }
+                        name: { type: string }
+                        address: { type: [string, "null"] }
+                        timezone: { type: string, example: America/Bogota }
+                        scheduling_config: { type: object }
+                        hours:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              days: { type: string, example: Lunes a sábado }
+                              hours: { type: string, example: "10:00–20:00" }
+                        closed_weekdays: { type: array, items: { type: string, enum: [sun, mon, tue, wed, thu, fri, sat] } }
+                        whatsapp: { type: [string, "null"], description: E.164 }
+                        directions_url: { type: [string, "null"] }
+                        upcoming_closures:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              from_local: { type: string, example: "2026-11-16T00:00:00-05:00" }
+                              until_local: { type: string, example: "2026-11-17T00:00:00-05:00" }
+                              day: { type: string, example: "2026-11-16" }
+                              all_day: { type: boolean }
+                              public_reason: { type: [string, "null"], enum: [site_closed, unavailable, null] }
+                              public_reason_label: { type: [string, "null"] }
+                              customer_message: { type: string, example: "La sede está cerrada el lunes, 16 de noviembre." }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }

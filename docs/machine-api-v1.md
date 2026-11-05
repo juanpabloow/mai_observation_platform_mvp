@@ -513,7 +513,7 @@ model). Endpoints:
 
 | Method + path | Capability |
 |---|---|
-| `GET /api/scheduling/v1/sites` | `scheduling.read` |
+| `GET /api/scheduling/v1/sites` (hours, public contact, closures of the next 14 days) | `scheduling.read` |
 | `GET /api/scheduling/v1/services?site_id=` | `scheduling.read` |
 | `GET /api/scheduling/v1/staff?site_id=&(service_id\|service)=&bookable=true` | `scheduling.read` |
 | `GET /api/scheduling/v1/availability?site_id=&service_id=&from=&to=&staff_id=` | `scheduling.read` |
