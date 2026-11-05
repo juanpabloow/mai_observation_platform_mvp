@@ -58,7 +58,11 @@ real tokens or hosts.)
 ```bash
 H=(-H "Authorization: Bearer $TOKEN" -H "X-Workflow-Ref: $WF")
 
-# Sites of the resolved client
+# Sites of the resolved client — each with its weekly hours (as /book shows them),
+# public WhatsApp / directions, and whole-site closures of the next 14 days
+# (upcoming_closures[].customer_message; public reason only). Read hours and closures
+# HERE instead of writing them into the agent prompt: the business edits them in
+# Agenda → Horarios y ausencias and the assistant sees the change on the next call.
 curl "${H[@]}" "$BASE/sites"
 
 # Services enabled at a site
